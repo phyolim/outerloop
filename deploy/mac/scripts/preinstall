@@ -1,0 +1,8 @@
+#!/bin/bash
+# Runs BEFORE the pkg lays down any files. Gates the install on prerequisites by
+# delegating to preflight.sh (bundled beside this script by build-pkg.sh, together
+# with a copy of deploy.env so ROLE/FAKE/VPS are known before payload extraction).
+# A non-zero exit aborts the install cleanly — nothing is written to disk.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+exec "$HERE/preflight.sh"

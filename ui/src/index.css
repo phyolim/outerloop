@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Operator-console foundation. No web fonts by design — the hub serves this on a
+   LAN and may be offline. Identity comes from the monospace voice (the native
+   typography of a dev tool), not a downloaded display face. */
+:root {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Every route change rises into place — one motion, everywhere. */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.page-enter {
+  animation: page-in 0.22s ease-out both;
+}
+
+/* Cards stagger in a beat behind the page. */
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.card-enter {
+  animation: card-in 0.3s ease-out both;
+}
+
+/* Live heartbeat for online indicators. */
+@keyframes pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(74 222 128 / 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgb(74 222 128 / 0);
+  }
+}
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@layer components {
+  /* The console's section voice: tiny, wide-tracked, uppercase. */
+  .microlabel {
+    @apply text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400;
+  }
+  .mono {
+    font-family: var(--mono);
+  }
+}
+
+/* Native <dialog> chrome for the create-item modal. */
+dialog::backdrop {
+  background: rgb(15 23 42 / 0.5);
+}
+dialog[open] {
+  animation: page-in 0.18s ease-out;
+}
+
+/* Faint blueprint grid behind the workspace — atmosphere, not noise. */
+.workspace-bg {
+  background-color: #f8fafc;
+  background-image: linear-gradient(rgb(15 23 42 / 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(15 23 42 / 0.025) 1px, transparent 1px);
+  background-size: 28px 28px;
+}

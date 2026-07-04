@@ -1,0 +1,12 @@
+# outerloop cron line. Four ticks a day. cron's env is minimal, so make
+# HOME + PATH explicit and use absolute binary paths.
+#
+# Install with:  crontab -e   (then paste, editing the paths)
+# Set INBOX_FAKE=0 only once you have pointed coding tickets at a real repo and
+# verified `gh auth status` works in a non-interactive shell.
+
+0 9,13,17,21 * * *  cd $HOME/Github/outerloop && /usr/bin/env -i HOME=$HOME PATH=/opt/homebrew/bin:/usr/bin:/bin INBOX_FAKE=1 /opt/homebrew/bin/python3 -m inbox tick >> $HOME/Github/outerloop/data/tick.log 2>&1
+
+# macOS note: cron does NOT fire while the laptop is asleep. If you want catch-up
+# on wake, use a launchd LaunchAgent with StartCalendarInterval running the same
+# `python3 -m inbox tick` instead of (or alongside) cron.

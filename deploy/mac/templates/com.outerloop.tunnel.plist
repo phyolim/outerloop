@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- TUNNEL — holds the outbound reverse SSH tunnel (hub -> relay box) open. Runs a small
+     wrapper that reads relay config (VPS host, tunnel user, key path) at launch from
+     settings.json (menu-bar Settings) with deploy.env as the baked fallback; no config =>
+     idle. KeepAlive + ssh keepalives respawn it if the link drops. Only on the HUB. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.outerloop.tunnel</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__APPDIR__/deploy/mac/tunnel-run.sh</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key><string>__HOME__</string>
+        <key>INBOX_HOME</key><string>__DATA__</string>
+    </dict>
+    <!-- restart on a dropped link (ssh exits nonzero) but stay down after a clean idle
+         exit (no relay configured yet) — same as the worker's idle-until-configured. -->
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+    <key>RunAtLoad</key><true/>
+    <!-- throttle respawns so a down relay doesn't hot-loop ssh -->
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>StandardOutPath</key><string>__DATA__/tunnel.log</string>
+    <key>StandardErrorPath</key><string>__DATA__/tunnel.log</string>
+    <key>ProcessType</key><string>Background</string>
+</dict>
+</plist>

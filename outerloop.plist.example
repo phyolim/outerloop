@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd LaunchAgent for outerloop. Preferred over cron on a Mac because
+  StartCalendarInterval runs a job missed during sleep ONCE on wake (cron just skips it).
+
+  Edit the absolute paths for your machine, then install:
+    cp outerloop.plist.example ~/Library/LaunchAgents/com.outerloop.tick.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.outerloop.tick.plist
+  To uninstall:
+    launchctl bootout gui/$(id -u)/com.outerloop.tick
+  This is the minimal SINGLE-BOX scheduler (one Mac, no fleet). For the multi-machine
+  hub + workers deploy, use the .pkg installers in deploy/ instead (see deploy/README.md).
+  Verify python/git/gh paths: `which python3 git gh`. Flip INBOX_FAKE to 0 only after a
+  successful real-mode smoke test.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.outerloop.tick</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/python3</string>
+        <string>-m</string>
+        <string>inbox</string>
+        <string>tick</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/YOU/outerloop</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/YOU</string>
+        <key>INBOX_FAKE</key>
+        <string>1</string>
+    </dict>
+
+    <!-- Four ticks a day. launchd runs a missed interval once after wake. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>13</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOU/outerloop/data/tick.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOU/outerloop/data/tick.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

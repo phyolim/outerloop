@@ -1,0 +1,10 @@
+data/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+# built installers bake in device tokens — never commit them
+*.pkg
+/dist/
+# compiled menu-bar app (build-app.sh output) — a build artifact, rebuilt on demand
+Outerloop.app/

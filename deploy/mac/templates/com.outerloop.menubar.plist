@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- MENU-BAR indicator. GUI agent in the user's Aqua session; relaunches at login. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.outerloop.menubar</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__APPDIR__/Outerloop.app/Contents/MacOS/Outerloop</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ROLE</key><string>__ROLE__</string>
+        <key>DASH_URL</key><string>__DASH_URL__</string>
+    </dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ProcessType</key><string>Interactive</string>
+    <key>StandardOutPath</key><string>__DATA__/menubar.log</string>
+    <key>StandardErrorPath</key><string>__DATA__/menubar.log</string>
+</dict>
+</plist>
