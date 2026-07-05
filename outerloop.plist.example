@@ -10,7 +10,7 @@
     launchctl bootout gui/$(id -u)/com.outerloop.tick
   This is the minimal SINGLE-BOX scheduler (one Mac, no fleet). For the multi-machine
   hub + workers deploy, use the .pkg installers in deploy/ instead (see deploy/README.md).
-  Verify python/git/gh paths: `which python3 git gh`. Flip INBOX_FAKE to 0 only after a
+  Verify python/git/gh paths: `which python3 git gh`. Flip OUTERLOOP_FAKE to 0 only after a
   successful real-mode smoke test.
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -23,7 +23,7 @@
     <array>
         <string>/opt/homebrew/bin/python3</string>
         <string>-m</string>
-        <string>inbox</string>
+        <string>outerloop</string>
         <string>tick</string>
     </array>
 
@@ -36,7 +36,7 @@
         <string>/opt/homebrew/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>/Users/YOU</string>
-        <key>INBOX_FAKE</key>
+        <key>OUTERLOOP_FAKE</key>
         <string>1</string>
     </dict>
 

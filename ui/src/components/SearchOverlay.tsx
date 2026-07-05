@@ -2,14 +2,14 @@ import { useDeferredValue, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchSearch } from '../api'
 import { ago } from '../lib'
-import KindBadge from './KindBadge'
-import { StatusPill } from './ui'
+import { navigate } from '../router'
+import { STATE_COLOR, STATUS_LABEL, kindColor } from './ui'
 
 /* Jira-style quick search: an overlay palette, instant results across ALL
    statuses (the board only shows live + recent done). "/" or ⌘K opens it. */
 
 function go(id: number, close: () => void) {
-  window.location.hash = `#/ticket/${id}`
+  navigate(`/ticket/${id}`)
   close()
 }
 
@@ -41,18 +41,18 @@ export default function SearchOverlay({ open, onClose }: { open: boolean; onClos
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-900/50 p-4 pt-[12vh]"
+      className="fixed inset-0 z-50 bg-[rgba(6,8,11,0.7)] p-4 pt-[12vh]"
       onClick={onClose}
       onKeyDown={(e) => {
         if (e.key === 'Escape') onClose()
       }}
     >
       <div
-        className="mx-auto max-w-xl overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl"
+        className="mx-auto max-w-[560px] overflow-hidden rounded-xl border border-white/[0.12] bg-panel shadow-[0_25px_60px_rgba(0,0,0,0.5)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-2 border-b border-slate-100 px-3">
-          <svg viewBox="0 0 16 16" className="h-4 w-4 shrink-0 text-slate-400" fill="none" stroke="currentColor" strokeWidth="1.6">
+        <div className="flex items-center gap-2.5 border-b border-hairline px-3.5">
+          <svg viewBox="0 0 16 16" className="h-[15px] w-[15px] shrink-0 text-tx3" fill="none" stroke="currentColor" strokeWidth="1.6">
             <circle cx="7" cy="7" r="4.5" />
             <path d="M10.5 10.5L14 14" strokeLinecap="round" />
           </svg>
@@ -71,9 +71,9 @@ export default function SearchOverlay({ open, onClose }: { open: boolean; onClos
               }
             }}
             placeholder="Search items — title, description, project, or #id"
-            className="w-full bg-transparent py-3 text-sm outline-none placeholder:text-slate-400"
+            className="w-full bg-transparent py-[13px] text-[13px] text-tx outline-none placeholder:text-tx3"
           />
-          {isFetching ? <span className="mono shrink-0 text-[11px] text-slate-300">…</span> : null}
+          {isFetching ? <span className="mono shrink-0 text-[11px] text-tx3">…</span> : null}
         </div>
 
         <div className="max-h-[50vh] overflow-y-auto">
@@ -82,39 +82,47 @@ export default function SearchOverlay({ open, onClose }: { open: boolean; onClos
               key={t.id}
               onClick={() => go(t.id, onClose)}
               onMouseEnter={() => setSel(i)}
-              className={`flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors ${
-                i === sel ? 'bg-slate-100/80' : 'hover:bg-slate-50'
+              className={`flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left transition-colors ${
+                i === sel ? 'bg-white/[0.05]' : 'hover:bg-white/[0.03]'
               }`}
             >
-              <span className="mono shrink-0 text-xs text-slate-400">#{t.id}</span>
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-900">
+              <span className="mono shrink-0 text-xs text-tx3">#{t.id}</span>
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-tx">
                 {t.title}
               </span>
               {t.project ? (
-                <span className="mono hidden shrink-0 text-[11px] text-violet-600 sm:inline">
+                <span className="mono hidden shrink-0 text-[10px] text-proj sm:inline">
                   {t.project}
                 </span>
               ) : null}
-              <KindBadge label={t.kind_label} color={t.kind_color} />
-              <StatusPill status={t.status} />
-              <span className="mono hidden w-14 shrink-0 text-right text-[11px] text-slate-400 sm:inline">
+              <span
+                className="mono shrink-0 text-[10px] font-semibold uppercase tracking-[0.08em]"
+                style={{ color: kindColor(t.kind_label, t.kind_color) }}
+              >
+                {t.kind_label}
+              </span>
+              <span
+                className="mono shrink-0 text-[10px] font-semibold"
+                style={{ color: STATE_COLOR[t.status] ?? '#5d6470' }}
+              >
+                ● {STATUS_LABEL[t.status] ?? t.status}
+              </span>
+              <span className="mono hidden w-14 shrink-0 text-right text-[10px] text-tx3 sm:inline">
                 {ago(t.updated_at)}
               </span>
             </button>
           ))}
           {dq.trim() && !isFetching && results.length === 0 ? (
-            <p className="px-3 py-6 text-center text-sm text-slate-400">
-              No items match “{dq}”.
-            </p>
+            <p className="px-3.5 py-6 text-center text-[13px] text-tx3">No items match “{dq}”.</p>
           ) : null}
           {!dq.trim() ? (
-            <p className="px-3 py-6 text-center text-sm text-slate-400">
+            <p className="px-3.5 py-6 text-center text-[13px] text-tx3">
               Type to search all items, including done and on-hold.
             </p>
           ) : null}
         </div>
 
-        <div className="mono flex items-center gap-3 border-t border-slate-100 bg-slate-50/60 px-3 py-1.5 text-[11px] text-slate-400">
+        <div className="mono flex items-center gap-3.5 border-t border-hairline bg-white/[0.02] px-3.5 py-[7px] text-[10px] text-tx3">
           <span>↵ open</span>
           <span>esc close</span>
           {results.length ? <span className="ml-auto">{results.length} result(s)</span> : null}

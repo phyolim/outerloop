@@ -1,5 +1,5 @@
 #!/bin/bash
-# Runtime device identity (INBOX_DEVICE/TOKEN) lives ONLY in the worker launchd plist.
+# Runtime worker identity (OUTERLOOP_WORKER/TOKEN) lives ONLY in the worker launchd plist.
 # A .pkg upgrade re-renders that plist from the baked deploy.env; postinstall must
 # prefer the EXISTING plist's runtime-owned values so an upgrade never de-pairs a box.
 # This drives the same plist_env + prefer-existing logic postinstall uses. macOS only.
@@ -19,34 +19,34 @@ out="$TMP/worker.plist"
 
 plist_env() { /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:$2" "$1" 2>/dev/null || true; }
 
-# Same slot logic as postinstall's render_load (device/caps/hub/token/models).
+# Same slot logic as postinstall's render_load (worker/caps/hub/token/models).
 render() {
-  local dev="${DEVICE:-}" tok="${TOKEN:-}" hub="${HUB_URL:-}" caps="${CAPS:-[]}" models="${MODELS:-}" p
+  local dev="${WORKER:-}" tok="${TOKEN:-}" hub="${HUB_URL:-}" caps="${CAPS:-[]}" models="${MODELS:-}" p
   if [ -f "$out" ]; then
-    p="$(plist_env "$out" INBOX_DEVICE)";        [ -n "$p" ] && dev="$p"
-    p="$(plist_env "$out" INBOX_DEVICE_TOKEN)";  [ -n "$p" ] && tok="$p"
-    p="$(plist_env "$out" INBOX_HUB)";           [ -n "$p" ] && hub="$p"
-    p="$(plist_env "$out" INBOX_CAPABILITIES)";  [ -n "$p" ] && caps="$p"
-    p="$(plist_env "$out" INBOX_MODELS)";        [ -n "$p" ] && models="$p"
+    p="$(plist_env "$out" OUTERLOOP_WORKER)";        [ -n "$p" ] && dev="$p"
+    p="$(plist_env "$out" OUTERLOOP_WORKER_TOKEN)";  [ -n "$p" ] && tok="$p"
+    p="$(plist_env "$out" OUTERLOOP_HUB)";           [ -n "$p" ] && hub="$p"
+    p="$(plist_env "$out" OUTERLOOP_CAPABILITIES)";  [ -n "$p" ] && caps="$p"
+    p="$(plist_env "$out" OUTERLOOP_MODELS)";        [ -n "$p" ] && models="$p"
   fi
   sed -e "s#__PYTHON__#/usr/bin/python3#g" -e "s#__PATH__#/bin#g" \
       -e "s#__APPDIR__#/x#g" -e "s#__HOME__#/x#g" -e "s#__DATA__#/x#g" \
       -e "s#__FAKE__#1#g" -e "s#__CLAUDE_BIN__##g" -e "s#__ALLOW_NO_CI__#0#g" \
-      -e "s#__DEVICE__#${dev}#g" -e "s#__CAPS__#${caps}#g" \
+      -e "s#__WORKER__#${dev}#g" -e "s#__CAPS__#${caps}#g" \
       -e "s#__HUB_URL__#${hub}#g" -e "s#__TOKEN__#${tok}#g" -e "s#__MODELS__#${models}#g" \
       "$TPL" > "$out"
 }
 
 # 1. Fresh install: baked values land in the plist.
-DEVICE=pro TOKEN=tok1 HUB_URL=http://mini.local:8765 render
-[ "$(plist_env "$out" INBOX_DEVICE)" = pro ]  || { echo "FAIL: fresh device"; exit 1; }
-[ "$(plist_env "$out" INBOX_DEVICE_TOKEN)" = tok1 ] || { echo "FAIL: fresh token"; exit 1; }
+WORKER=worker-1 TOKEN=tok1 HUB_URL=http://hub.local:8765 render
+[ "$(plist_env "$out" OUTERLOOP_WORKER)" = worker-1 ]  || { echo "FAIL: fresh worker"; exit 1; }
+[ "$(plist_env "$out" OUTERLOOP_WORKER_TOKEN)" = tok1 ] || { echo "FAIL: fresh token"; exit 1; }
 
 # 2. Upgrade with an EMPTY-identity pkg (the recommended pair-from-Fleet build): the
-#    existing device/token/hub survive instead of being wiped.
-DEVICE="" TOKEN="" HUB_URL="" render
-[ "$(plist_env "$out" INBOX_DEVICE)" = pro ]  || { echo "FAIL: upgrade wiped device"; exit 1; }
-[ "$(plist_env "$out" INBOX_DEVICE_TOKEN)" = tok1 ] || { echo "FAIL: upgrade wiped token"; exit 1; }
-[ "$(plist_env "$out" INBOX_HUB)" = http://mini.local:8765 ] || { echo "FAIL: upgrade wiped hub"; exit 1; }
+#    existing worker/token/hub survive instead of being wiped.
+WORKER="" TOKEN="" HUB_URL="" render
+[ "$(plist_env "$out" OUTERLOOP_WORKER)" = worker-1 ]  || { echo "FAIL: upgrade wiped worker"; exit 1; }
+[ "$(plist_env "$out" OUTERLOOP_WORKER_TOKEN)" = tok1 ] || { echo "FAIL: upgrade wiped token"; exit 1; }
+[ "$(plist_env "$out" OUTERLOOP_HUB)" = http://hub.local:8765 ] || { echo "FAIL: upgrade wiped hub"; exit 1; }
 
 echo PASS

@@ -1,19 +1,19 @@
 # Self-contained: runs from anywhere, uses a throwaway FAKE-mode DB. No env setup needed.
 import os, sys, atexit, shutil, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-test-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
-from inbox import db as _bootstrap_db
+from outerloop import db as _bootstrap_db
 _bootstrap_db.init_db()
 # --- test body ---
 
 """End-to-end FAKE-mode drive of the whole loop. Adds tickets, runs ticks, and
 auto-approves decisions as a human would, then asserts the invariants."""
 import json
-from inbox import db
-from inbox.tick import run_tick
+from outerloop import db
+from outerloop.tick import run_tick
 
 
 def add(title, body, type_, repo=None):

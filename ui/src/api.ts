@@ -1,25 +1,25 @@
 import type {
   AddPayload,
-  BoardResponse,
   DecisionsResponse,
-  DoneResponse,
   FleetResponse,
   LogEvent,
   Factors,
+  InboxResponse,
   InsightsResponse,
-  ParkedTicket,
+  PairRequest,
   RawRequest,
   SearchResult,
+  TicketsResponse,
   TicketThread,
 } from './types'
 
 export const queryKeys = {
-  board: (project: string) => ['board', project] as const,
-  done: (project: string) => ['done', project] as const,
+  tickets: (project: string) => ['tickets', project] as const,
+  inbox: () => ['inbox'] as const,
   decisions: () => ['decisions'] as const,
   ticket: (id: number) => ['ticket', id] as const,
   fleet: () => ['fleet'] as const,
-  parked: () => ['parked'] as const,
+  pair: () => ['pair'] as const,
   log: () => ['log'] as const,
   requests: () => ['requests'] as const,
   insights: () => ['insights'] as const,
@@ -35,16 +35,16 @@ async function getJSON<T>(url: string): Promise<T> {
   return res.json() as Promise<T>
 }
 
-export function fetchBoard(project: string): Promise<BoardResponse> {
-  return getJSON<BoardResponse>(`/ui/board.json${projectQuery(project)}`)
-}
-
-export function fetchDone(project: string): Promise<DoneResponse> {
-  return getJSON<DoneResponse>(`/ui/done.json${projectQuery(project)}`)
-}
-
 export function fetchDecisions(): Promise<DecisionsResponse> {
   return getJSON<DecisionsResponse>('/ui/decisions.json')
+}
+
+export function fetchTickets(project: string): Promise<TicketsResponse> {
+  return getJSON<TicketsResponse>(`/ui/tickets.json${projectQuery(project)}`)
+}
+
+export function fetchInbox(): Promise<InboxResponse> {
+  return getJSON<InboxResponse>('/ui/inbox.json')
 }
 
 export async function fetchTicket(id: number): Promise<TicketThread | null> {
@@ -93,10 +93,6 @@ export function fetchFleet(): Promise<FleetResponse> {
   return getJSON<FleetResponse>('/ui/fleet.json')
 }
 
-export function fetchParked(): Promise<{ tickets: ParkedTicket[] }> {
-  return getJSON('/ui/parked.json')
-}
-
 export function fetchLog(): Promise<{ events: LogEvent[] }> {
   return getJSON('/ui/log.json')
 }
@@ -113,26 +109,53 @@ export function reviveTicket(ticket_id: number): Promise<{ ok: true }> {
   return postJSON('/ui/revive', { ticket_id })
 }
 
-export function deviceControl(payload: {
-  device: string
+export function workerControl(payload: {
+  worker: string
   action: 'pause' | 'resume' | 'drain'
 }): Promise<{ ok: true }> {
-  return postJSON('/ui/device-control', payload)
+  return postJSON('/ui/worker-control', payload)
 }
 
-export function deviceCaps(payload: {
-  device: string
+export function workerCaps(payload: {
+  worker: string
   capabilities: string
 }): Promise<{ ok: true; capabilities: string[] }> {
-  return postJSON('/ui/device-caps', payload)
+  return postJSON('/ui/worker-caps', payload)
 }
 
-export function devicePair(device: string): Promise<{ device: string; token: string }> {
-  return postJSON('/ui/device-pair', { device })
+export function workerPair(worker: string): Promise<{ worker: string; token: string }> {
+  return postJSON('/ui/worker-pair', { worker })
+}
+
+export function fetchPairRequests(): Promise<{ requests: PairRequest[]; seed_caps: string[] }> {
+  return getJSON('/ui/pair.json')
+}
+
+export async function pairConfirm(payload: {
+  request_id: string
+  code: string
+}): Promise<{ ok: true }> {
+  // 400 carries the human-readable reason (wrong code, tries left) — surface it.
+  const res = await fetch('/ui/pair-confirm', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const j = await res.json()
+  if (!res.ok) throw new Error(j.error ?? `${res.status}`)
+  return j
+}
+
+export function pairIgnore(request_id: string): Promise<{ ok: true }> {
+  return postJSON('/ui/pair-ignore', { request_id })
 }
 
 export function runTick(): Promise<{ ok: true }> {
   return postJSON('/ui/run-tick', {})
+}
+
+export function setKillSwitch(on: boolean): Promise<{ ok: true; on: boolean }> {
+  return postJSON('/ui/kill-switch', { on })
 }
 
 export function startTicket(id: number): Promise<{ ok: boolean }> {

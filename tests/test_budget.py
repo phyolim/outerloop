@@ -1,17 +1,17 @@
 # Self-contained: hub-wide spend ceiling (#2). FAKE mode, throwaway DB.
 import os, sys, atexit, shutil, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-budget-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
-from inbox import db as _bdb
+from outerloop import db as _bdb
 _bdb.init_db()
 # --- test body ---
-from inbox import db, claim
+from outerloop import db, claim
 
 c = db.connect()
-c.execute("INSERT INTO device(name, capabilities, status, last_seen)"
+c.execute("INSERT INTO worker(name, capabilities, status, last_seen)"
           " VALUES('air', '[]', 'online', datetime('now'))")
 c.execute("INSERT INTO ticket(title, body, type, status, requires, score)"
           " VALUES('a note', '', 'knowledge', 'active', '[]', 10)")

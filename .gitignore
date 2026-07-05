@@ -3,8 +3,11 @@ __pycache__/
 *.pyc
 .DS_Store
 .idea/
-# built installers bake in device tokens — never commit them
+# built installers bake in worker tokens — never commit them
 *.pkg
 /dist/
 # compiled menu-bar app (build-app.sh output) — a build artifact, rebuilt on demand
 Outerloop.app/
+
+# playwright MCP screenshot/console artifacts (verify runs)
+.playwright-mcp/

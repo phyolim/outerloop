@@ -1,50 +1,46 @@
-import { useSyncExternalStore } from 'react'
+import { useEffect } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import InboxPage from './components/InboxPage'
 import Board from './components/Board'
-import DonePage from './components/DonePage'
-import DecisionsPage from './components/DecisionsPage'
 import TicketPage from './components/TicketPage'
 import FleetPage from './components/FleetPage'
-import ParkedPage from './components/ParkedPage'
 import LogPage from './components/LogPage'
-import InsightsPage from './components/InsightsPage'
-import Nav from './components/Nav'
+import Shell from './components/Nav'
+import { onLinkClick, usePath } from './router'
 
-// ponytail: hash routing only — a handful of routes, no router lib needed.
-function useHash(): string {
-  return useSyncExternalStore(
-    (cb) => {
-      window.addEventListener('hashchange', cb)
-      return () => window.removeEventListener('hashchange', cb)
-    },
-    () => window.location.hash,
-  )
+// Subscribe once to the server's SSE stream; on any DB change, refetch every
+// active query. Replaces per-query polling. EventSource auto-reconnects, and we
+// invalidate on (re)connect too so a dropped stream can't leave stale data.
+function useServerEvents() {
+  const qc = useQueryClient()
+  useEffect(() => {
+    const es = new EventSource('/ui/events')
+    const refetch = () => qc.invalidateQueries()
+    es.onmessage = refetch
+    es.onopen = refetch
+    return () => es.close()
+  }, [qc])
 }
 
 function route(path: string) {
   if (path.startsWith('/ticket/')) {
     const id = Number(path.split('/')[2])
-    return Number.isFinite(id) ? <TicketPage id={id} /> : <Board />
+    return Number.isFinite(id) ? <TicketPage id={id} /> : <InboxPage />
   }
-  if (path === '/decisions') return <DecisionsPage />
-  if (path === '/done') return <DonePage />
+  if (path === '/board') return <Board />
   if (path === '/fleet') return <FleetPage />
-  if (path === '/parked') return <ParkedPage />
   if (path === '/log') return <LogPage />
-  if (path === '/insights') return <InsightsPage />
-  return <Board />
+  return <InboxPage /> // '/' — the operator's home
 }
 
 export default function App() {
-  const path = (useHash().replace(/^#/, '') || '/') as string
+  const path = usePath() || '/'
+  useServerEvents()
   return (
-    <div className="workspace-bg min-h-screen text-slate-900">
-      <div className="mx-auto max-w-7xl px-4 py-4">
-        <Nav path={path} />
-        {/* key on path so every route change replays the enter animation */}
-        <main key={path} className="page-enter">
-          {route(path)}
-        </main>
-      </div>
+    // onClickCapture turns every plain same-origin <a> into a pushState navigation —
+    // components keep writing ordinary hrefs, no <Link> wrapper needed.
+    <div className="min-h-screen bg-ink text-tx" onClickCapture={onLinkClick}>
+      <Shell path={path}>{route(path)}</Shell>
     </div>
   )
 }

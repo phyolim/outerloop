@@ -6,9 +6,20 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 OUT="${1:-$HERE}"
 APP="$OUT/Outerloop.app"
 
+# Prefer a full Xcode toolchain when one is installed: the beta Command Line Tools
+# lack the x86_64 Swift-compat libs, so the universal (Intel) slice fails to link
+# under bare CLT. Harmless when only CLT exists.
+XC="$(ls -d /Applications/Xcode*.app 2>/dev/null | head -1)"
+[ -n "$XC" ] && export DEVELOPER_DIR="$XC/Contents/Developer"
+
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
+
+# Stamp the bundle version from the single source of truth (outerloop/__init__.py)
+# so the app tracks releases instead of the template's placeholder.
+VER="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$HERE/../../../outerloop/__init__.py")"
+[ -n "$VER" ] && /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VER" "$APP/Contents/Info.plist"
 
 # Universal binary (arm64 + x86_64) so one .pkg runs on both Apple Silicon and Intel
 # Macs — swiftc only targets the build host, which otherwise ships an arch-only app

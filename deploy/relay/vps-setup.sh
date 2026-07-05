@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # One-time setup for the PUBLIC relay box (AWS Lightsail / EC2, Ubuntu 22.04+).
 # This box does two jobs and nothing else:
-#   1. accept the mini's outbound `ssh -R` reverse tunnel on loopback:8765
+#   1. accept the hub's outbound `ssh -R` reverse tunnel on loopback:8765
 #   2. run Caddy on :443 — auto-HTTPS + basic-auth for the browser UI, Bearer for /api
 #
 # Run it ONCE, as root (sudo), on a fresh box. The dashboard password must come from
 # the env (DASH_PASSWORD) or a 3rd arg so the piped form stays non-interactive:
-#   curl -fsSL .../vps-setup.sh | DASH_PASSWORD='s3cret' sudo -E bash -s -- <DASHBOARD_USER> <MINI_SSH_PUBKEY>
+#   curl -fsSL .../vps-setup.sh | DASH_PASSWORD='s3cret' sudo -E bash -s -- <DASHBOARD_USER> <HUB_SSH_PUBKEY>
 # or copy it over and:
-#   sudo DASH_PASSWORD='s3cret' bash vps-setup.sh <DASHBOARD_USER> "<MINI_SSH_PUBKEY>"
-#   sudo bash vps-setup.sh <DASHBOARD_USER> "<MINI_SSH_PUBKEY>" 's3cret'
+#   sudo DASH_PASSWORD='s3cret' bash vps-setup.sh <DASHBOARD_USER> "<HUB_SSH_PUBKEY>"
+#   sudo bash vps-setup.sh <DASHBOARD_USER> "<HUB_SSH_PUBKEY>" 's3cret'
 # Omit the password entirely only in a real terminal — then caddy prompts for it.
 #
 # Prereqs you do in the AWS console first (can't be scripted from inside the box):
@@ -17,8 +17,8 @@
 #   - note the box's PUBLIC IP (the script derives the <ip>.sslip.io hostname from it)
 set -euo pipefail
 
-DASH_USER="${1:?usage: vps-setup.sh <dashboard-username> <mini-ssh-public-key>}"
-MINI_PUBKEY="${2:?need the mini SSH public key (~/.ssh/id_ed25519.pub on the mini)}"
+DASH_USER="${1:?usage: vps-setup.sh <dashboard-username> <hub-ssh-public-key>}"
+HUB_PUBKEY="${2:?need the hub SSH public key (~/.ssh/id_ed25519.pub on the hub)}"
 
 PUB_IP="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')"
 HOSTNAME="${PUB_IP}.sslip.io"   # resolves to PUB_IP, lets Caddy get a real Let's Encrypt cert — no domain to buy
@@ -31,13 +31,13 @@ if ! id tunnel &>/dev/null; then
 fi
 install -d -m 700 -o tunnel -g tunnel /home/tunnel/.ssh
 # `restrict` drops everything; we add back only port-forwarding. A stolen key from the
-# mini can forward ports and nothing else — no shell on the relay.
-echo "restrict,port-forwarding ${MINI_PUBKEY}" > /home/tunnel/.ssh/authorized_keys
+# hub can forward ports and nothing else — no shell on the relay.
+echo "restrict,port-forwarding ${HUB_PUBKEY}" > /home/tunnel/.ssh/authorized_keys
 chown tunnel:tunnel /home/tunnel/.ssh/authorized_keys
 chmod 600 /home/tunnel/.ssh/authorized_keys
 
 # --- 1b. sshd keepalive: reap dead tunnels fast so :8765 is free on reconnect ---
-# Without this a dropped `ssh -R` can leave 8765 held; the mini's next dial fails
+# Without this a dropped `ssh -R` can leave 8765 held; the hub's next dial fails
 # (ExitOnForwardFailure). ClientAlive* probes let sshd notice and release it.
 install -d -m 755 /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/10-loop-tunnel.conf <<'EOF'
@@ -79,7 +79,7 @@ write_caddyfile() {   # $1 = directive name
 	cat > /etc/caddy/Caddyfile <<EOF
 # Auto-HTTPS for ${HOSTNAME} (HTTP-01 challenge, needs :80 + :443 open).
 ${HOSTNAME} {
-	# Worker API: no basic-auth here — the app already checks per-device Bearer tokens.
+	# Worker API: no basic-auth here — the app already checks per-worker Bearer tokens.
 	@api path /api/*
 	handle @api {
 		reverse_proxy localhost:8765
@@ -118,10 +118,10 @@ cat <<EOF
 ==================================================================
  relay is up.
    dashboard URL : https://${HOSTNAME}/
-   workers point : INBOX_HUB=https://${HOSTNAME}
+   workers point : OUTERLOOP_HUB=https://${HOSTNAME}
  Put these into the Mac .pkg build (deploy/mac/build-pkg.sh):
    VPS_HOST=${HOSTNAME}
    TUNNEL_USER=tunnel
- The mini reaches this box via its outbound ssh -R; nothing inbound to your home.
+ The hub reaches this box via its outbound ssh -R; nothing inbound to your home.
 ==================================================================
 EOF

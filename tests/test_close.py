@@ -7,13 +7,13 @@ from urllib.request import urlopen, Request
 from urllib.error import HTTPError
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-close-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 
-from inbox import db
-from inbox.web import Handler
+from outerloop import db
+from outerloop.web import Handler
 
 db.init_db()
 c = db.connect()

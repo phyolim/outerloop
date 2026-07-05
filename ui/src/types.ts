@@ -7,7 +7,7 @@ export interface Card {
   kind_label: string
   kind_color: string
   type: 'coding' | 'knowledge' | 'ops'
-  status: 'inbox' | 'active' | 'blocked' | 'done'
+  status: 'inbox' | 'active' | 'blocked' | 'parked' | 'failed' | 'done'
   sub_stage: string | null
   score: number | null
   breakdown: string
@@ -17,37 +17,50 @@ export interface Card {
   wait?: string | null
 }
 
-export interface BoardResponse {
-  columns: {
-    inbox: Card[]
-    active: Card[]
-    blocked: Card[]
-    done: Card[]
-  }
+// Board v2: every ticket in one flat list; status is a client-side filter.
+export interface TicketsResponse {
+  tickets: Card[]
   counts: {
-    inbox: number
+    backlog: number
     active: number
     blocked: number
-    done: number
-    done_total: number
+    onhold: number
     failed: number
+    done: number
+    open: number
+    all: number
   }
   projects: string[]
 }
 
-export interface DoneTicket {
+// Inbox v2: the two sections decisions.json doesn't cover.
+export interface RunningTicket {
   id: number
   title: string
-  kind: Kind
   kind_label: string
   kind_color: string
   type: string
-  project: string | null
-  updated_at: string
+  sub_stage: string | null
+  score: number | null
+  // running = a worker holds the lease; queued = waiting for a free capable worker;
+  // unclaimable = NO online worker's caps cover `requires` (needs operator attention).
+  state: 'running' | 'queued' | 'unclaimable'
+  requires: string[]
+  worker: string | null
+  since: string
+  last_line: string | null
 }
-
-export interface DoneResponse {
-  tickets: DoneTicket[]
+export interface DigestEntry {
+  id: number
+  title: string
+  dot: 'ok' | 'bad' | 'muted'
+  what: string
+  at: string
+}
+export interface InboxResponse {
+  running: RunningTicket[]
+  digest: DigestEntry[]
+  drafts: number // drafts waiting to be started (they live on the Board, not here)
 }
 
 export interface DecisionCard {
@@ -59,6 +72,8 @@ export interface DecisionCard {
   reason: string // 'question' | 'error' | 'merge' | 'deploy' | ...
   preview: string
   at: string
+  decision_id?: number // present for pending decisions — enables inline answer
+  context?: DecisionContext
 }
 
 export interface DecisionsResponse {
@@ -144,7 +159,7 @@ export interface InsightsResponse {
   by_project: { project: string; total: number; done: number }[]
 }
 
-export interface Device {
+export interface Worker {
   name: string
   state: 'online' | 'offline' | 'paused' | 'draining'
   capabilities: string[]
@@ -155,17 +170,19 @@ export interface Device {
 
 export interface FleetResponse {
   spend: { spent: number; cap: number; halted: boolean; window_hours: number }
-  devices: Device[]
+  kill_switch: boolean
+  known_caps: string[] // seed defaults ∪ workers' caps ∪ live tickets' requires
+  version: string
+  workers: Worker[]
 }
 
-export interface ParkedTicket {
-  id: number
-  title: string
-  kind_label: string
-  kind_color: string
-  project: string | null
-  park_reason: string | null
-  created_at: string
+export interface PairRequest {
+  request_id: string
+  name: string
+  host_info: string
+  ip: string
+  expires_in: number
+  attempts_left: number
 }
 
 export interface LogEvent {
@@ -181,7 +198,7 @@ export interface LogEvent {
 export interface RawRequest {
   id: number
   at: string
-  device: string | null
+  worker: string | null
   method: string
   path: string
   status: number
@@ -203,7 +220,7 @@ export interface AddPayload {
   body: string
   project: string
   repo_path: string
-  draft: boolean // false = start immediately; true (default) = park as an unsubmitted idea
+  draft: boolean // false (default) = start immediately; true = park as an unsubmitted idea
 }
 
 // mirror of the contract's Kinds table; used by the quick-add kind selector

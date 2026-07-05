@@ -1,20 +1,20 @@
 # Self-contained: runs from anywhere, uses a throwaway FAKE-mode DB. No env setup needed.
 import os, sys, atexit, shutil, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-test-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
-from inbox import db as _bootstrap_db
+from outerloop import db as _bootstrap_db
 _bootstrap_db.init_db()
 # --- test body ---
 
 """Targeted tests for the safety machinery (skeptic must-fixes #1, #3, #6 + leases)."""
 import json
 from pathlib import Path
-from inbox import config, db, leasing, git_ops
-from inbox.tick import run_tick
-from inbox.handlers.coding import CodingHandler
+from outerloop import config, db, leasing, git_ops
+from outerloop.tick import run_tick
+from outerloop.handlers.coding import CodingHandler
 
 BASE = Path(config.HOME)
 
@@ -55,7 +55,7 @@ c = fresh("t_ci")
 orig_checks = git_ops.checks_green
 git_ops.checks_green = lambda ctx, t, hs: (False, "required check failing")
 try:
-    hs = {"branch": "inbox/ticket-1-abc", "pr_number": 1001,
+    hs = {"branch": "outerloop/ticket-1-abc", "pr_number": 1001,
           "pr_url": "https://example.invalid/pr/1001", "worktree_path": "/tmp/x"}
     c.execute("INSERT INTO ticket(title,body,type,status,sub_stage,handler_state,score)"
               " VALUES('m','','coding','active','merging',?,10)", (json.dumps(hs),))
@@ -76,7 +76,7 @@ print("OK #3 green-CI precondition: red checks re-gate the merge, no merge happe
 c = fresh("t_noci")
 git_ops.checks_green = lambda ctx, t, hs: (False, git_ops.NO_CI_STATUS)
 try:
-    hs = {"branch": "inbox/ticket-1-abc", "pr_number": 1002,
+    hs = {"branch": "outerloop/ticket-1-abc", "pr_number": 1002,
           "pr_url": "https://example.invalid/pr/1002", "worktree_path": "/tmp/x"}
     c.execute("INSERT INTO ticket(title,body,type,status,sub_stage,handler_state,score)"
               " VALUES('m','','coding','active','merging',?,10)", (json.dumps(hs),))

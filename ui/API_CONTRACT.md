@@ -1,6 +1,6 @@
 # Hub JSON contract for the React board SPA
 
-The SPA is served BY the Python hub (`inbox/web.py`). In production the hub serves the
+The SPA is served BY the Python hub (`outerloop/web.py`). In production the hub serves the
 built `ui/dist/` as static files at `/` and exposes these JSON routes under `/ui/*`
 (same trust zone as the existing HTML UI — no bearer token; the browser is protected by
 the LAN/Caddy boundary). In dev, Vite proxies `/ui/*` to `http://localhost:8765`.
@@ -77,7 +77,7 @@ started. Pass `"draft": false` to enter the pipeline immediately.
 ```
 Submits a draft: the next scheduler pass triages it like any new ticket.
 
-## Kinds (mirror of inbox/taxonomy.py — source of truth is the server)
+## Kinds (mirror of outerloop/taxonomy.py — source of truth is the server)
 | kind     | label    | color    | type      |
 |----------|----------|----------|-----------|
 | feature  | Feature  | #1a7f37  | coding    |
@@ -88,7 +88,9 @@ Submits a draft: the next scheduler pass triages it like any new ticket.
 
 `repo_path` is only meaningful for coding kinds (feature/bug/chore).
 
-## Pages that stay server-rendered (link to them, do NOT reimplement)
-`/ticket/<id>` (ticket detail), `/decisions`, `/fleet`, `/parked`, `/log`. Ticket cards
-link to `/ticket/<id>`. The board nav links to those absolute paths (full page nav is
-fine — they are plain hub pages).
+## Routing
+The SPA owns every page at its real path — `/`, `/ticket/<id>`, `/decisions`, `/done`,
+`/fleet`, `/parked`, `/log`, `/insights` — via history-API routing (`ui/src/router.ts`;
+plain `<a href="/x">` links, intercepted app-wide). The hub serves `index.html` for any
+non-`/ui/` path (SPA fallback), so deep links and reloads work. There are no
+server-rendered pages anymore; old `/#/x` hash URLs redirect to `/x` on load.

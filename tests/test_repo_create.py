@@ -1,12 +1,12 @@
 # Self-contained: runs from anywhere. No DB/env needed — pure-function checks.
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 
 """repo_slug must always emit a GitHub-safe name from an arbitrary ticket title, so a
 ticket-controlled title can never reach the gh argv as anything but [a-z0-9-]."""
 import re
-from inbox import git_ops
+from outerloop import git_ops
 
 SAFE = re.compile(r"^[a-z0-9-]+$")
 

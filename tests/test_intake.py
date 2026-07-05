@@ -1,26 +1,26 @@
 # External intake: POST /api/intake turns a webhook/curl payload into a ticket, gated
-# by its own shared secret (settings.intake_token) — NOT a device bearer token, and it
-# must keep working when require_auth=on (the vacation story: Sentry has no device).
-# Runs against the real coordinator handler. FAKE mode, throwaway DB.
+# by its own shared secret (settings.intake_token) — NOT a worker bearer token, and it
+# must keep working when require_auth=on (the vacation story: Sentry has no worker).
+# Runs against the real hub handler. FAKE mode, throwaway DB.
 import os, sys, atexit, shutil, tempfile, threading, time, json
 from http.server import ThreadingHTTPServer
 from urllib.request import urlopen, Request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-intake-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 
-from inbox import db
-from inbox.coordinator import CoordHandler
+from outerloop import db
+from outerloop.hub import HubHandler
 
 db.init_db()
 c = db.connect()
 
 PORT = 8824
 BASE = f"http://127.0.0.1:{PORT}"
-srv = ThreadingHTTPServer(("127.0.0.1", PORT), CoordHandler)
+srv = ThreadingHTTPServer(("127.0.0.1", PORT), HubHandler)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 time.sleep(0.3)
 
@@ -83,10 +83,10 @@ st, _ = post("/api/intake?token=s3cret", {"foo": "bar"})
 assert st == 400
 
 # 7. THE regression that matters: require_auth=on must not lock intake out (Sentry
-#    can't hold a device token), while the rest of /api/* still 401s without one.
+#    can't hold a worker token), while the rest of /api/* still 401s without one.
 db.set_setting(c, "require_auth", "on")
 st, _ = post("/api/tickets", {"title": "no token"})
-assert st == 401, "device API must still require auth"
+assert st == 401, "worker API must still require auth"
 st, r = post("/api/intake?token=s3cret", {"title": "works while auth on"})
 assert st == 200, r
 

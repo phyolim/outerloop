@@ -21,6 +21,32 @@ anything is written.
 
 ---
 
+## Releasing
+
+Cutting a release is **two parts, and only the first is automated**. There is no CI in
+this repo — nothing runs on a tag push; every release is published by hand.
+
+**1. Version + tag** — `scripts/release.sh <ver>` (clean `main` only): bumps
+`outerloop/__init__.py`, commits `release: v<ver>`, tags, pushes `main` + tag. Nothing else.
+
+**2. Publish the artifacts** — a finished release (see v0.1.9) carries two assets:
+
+```sh
+# CLI/service tarball WITH built ui/dist — this is what `brew install outerloop` fetches:
+scripts/build-release-tarball.sh          # -> dist/outerloop-full-<ver>.tar.gz + sha256
+gh release create v<ver> dist/outerloop-full-<ver>.tar.gz --title v<ver> --generate-notes
+
+# Signed + notarized menu-bar app for the cask (needs Developer ID cert + notary profile;
+# creates the release itself if step above hasn't run, and prints the cask sha256):
+deploy/mac/release-app.sh
+```
+
+**3. Bump the tap** — in the separate repo `phyolim/homebrew-tap`, update `url` + `sha256`
+in `Formula/outerloop.rb` to the new tarball (and the cask to the new app zip).
+`brew upgrade outerloop` only delivers the release after this lands.
+
+---
+
 ## Operating notes (any deployment)
 
 - **Keep the hub awake — the #1 silent unattended failure** (it owns the DB, API, UI,
@@ -28,19 +54,19 @@ anything is written.
   setting, and confirm with a real overnight test. Consider an external heartbeat (a
   worker curling `/fleet`) that alerts when the hub goes dark.
 - **Tokens & pairing:** a worker no longer needs a baked token — mint one on the hub's
-  `/fleet` → **Pair a new device** and paste it into the worker's menu-bar **Settings…**
+  `/fleet` → **Pair a new worker** and paste it into the worker's menu-bar **Settings…**
   (name + token), which writes its launchd env and restarts it. Rotate the same way
   (re-pair issues a fresh token; the old one stops working). If you *do* bake tokens
   (`--token` / `--tokens`), they live in the launchd plist + `deploy.env`: keep worker
-  perms tight and exclude built `*.pkg`s from backups. Give each device least-privilege
+  perms tight and exclude built `*.pkg`s from backups. Give each worker least-privilege
   capabilities (a report-only screener must not be able to merge).
 - **Merge safety:** failing CI is a hard block, independent of your approval click. A
   repo with no CI at all is flagged on the merge card and merges only on your explicit
-  approval (`--allow-merge-without-ci` / `INBOX_ALLOW_MERGE_WITHOUT_CI=1` additionally
+  approval (`--allow-merge-without-ci` / `OUTERLOOP_ALLOW_MERGE_WITHOUT_CI=1` additionally
   marks no-CI as green on the card).
 - **Kill switch:** a `KILL` file in the data dir or `kill_switch=on` halts all execution
-  before any side effect — keep a way to reach it independent of the UI. Per-device
-  pause / drain (Resume to bring a device back) is on the `/fleet` page.
+  before any side effect — keep a way to reach it independent of the UI. Per-worker
+  pause / drain (Resume to bring a worker back) is on the `/fleet` page.
 - **Remote access:** stand up the relay box with `deploy/relay/vps-setup.sh` (locked-down
   `tunnel` user + Caddy basic-auth + real cert). Point the hub at it either at build
   (`--vps <ip>.sslip.io --ssh-key <key>`) or at runtime in the hub's menu-bar **Settings…**
@@ -49,9 +75,9 @@ anything is written.
   outbound `ssh -R`, so no home port is opened.
 - **Never bind the hub's own port to a public IP.** The web UI has no login of its
   own — auth.py's bearer tokens only gate `/api` (worker traffic); every browser
-  route, including `POST /device-pair` (which mints a fresh device token to whoever
+  route, including `POST /worker-pair` (which mints a fresh worker token to whoever
   asks), is open to anyone who can reach the port. The code refuses to bind a
-  routable public address by default (`is_safe_bind` in [inbox/auth.py](inbox/auth.py),
-  override with `INBOX_ALLOW_PUBLIC_BIND=1`) precisely to stop this. The relay is
+  routable public address by default (`is_safe_bind` in [outerloop/auth.py](outerloop/auth.py),
+  override with `OUTERLOOP_ALLOW_PUBLIC_BIND=1`) precisely to stop this. The relay is
   what makes remote access safe: Caddy's basic-auth sits in front of *all* browser
   routes, not just `/api`, so nothing unauthenticated reaches the hub at all.

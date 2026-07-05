@@ -32,7 +32,7 @@ if [ -d "$APPDIR" ] || pkgutil --pkgs | grep -q '^com.outerloop\.'; then
   for r in hub worker; do sudo pkgutil --forget "com.outerloop.$r" 2>/dev/null; done
 fi
 
-# 4. data dir (DB, device tokens, logs, worktrees) — destructive, so gated
+# 4. data dir (DB, worker tokens, logs, worktrees) — destructive, so gated
 if [ -d "$DATA" ]; then
   if [ -n "$KEEP" ]; then
     echo "kept data: $DATA"

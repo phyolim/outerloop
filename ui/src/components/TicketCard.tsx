@@ -1,39 +1,39 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { startTicket } from '../api'
 import type { Card } from '../types'
-import KindBadge from './KindBadge'
+import { kindColor, stageChip, CHIP } from './ui'
+import { LifecycleMeter } from './lifecycle'
 
 export default function TicketCard({ card, index = 0 }: { card: Card; index?: number }) {
   const qc = useQueryClient()
   const isDraft = card.status === 'inbox' && card.draft
   const start = useMutation({
     mutationFn: () => startTicket(card.id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['board'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tickets'] }),
   })
-
-  const chip = card.status === 'blocked'
-    ? { text: `waiting: ${card.wait ?? '?'}`, cls: 'bg-amber-100 text-amber-800' }
-    : isDraft
-      ? { text: 'draft', cls: 'bg-amber-50 text-amber-700' }
-      : { text: card.sub_stage ?? 'new', cls: 'bg-slate-100 text-slate-600' }
+  const chip = stageChip(card)
 
   return (
     <a
-      href={`#/ticket/${card.id}`}
-      className="card-enter block rounded-lg border border-slate-200 bg-white p-3 shadow-sm transition-shadow hover:shadow-md"
-      style={{
-        borderLeft: `3px solid ${card.kind_color}`,
-        animationDelay: `${Math.min(index, 8) * 40}ms`,
-      }}
+      href={`/ticket/${card.id}`}
+      className="card-enter block rounded-[10px] border border-hairline bg-panel p-3 pb-2.5 transition-colors hover:border-white/[0.16] hover:bg-[#1a1e25]"
+      style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <span className="text-sm font-medium leading-snug text-slate-900">
-          <span className="mono text-xs text-slate-400">#{card.id}</span> {card.title}
+      <div className="mb-[7px] flex items-center gap-2">
+        <span className="mono text-[11px] text-tx3">#{card.id}</span>
+        <span
+          className="mono text-[10px] font-semibold uppercase tracking-[0.08em]"
+          style={{ color: kindColor(card.kind, card.kind_color) }}
+        >
+          {card.kind_label}
         </span>
-        <KindBadge label={card.kind_label} color={card.kind_color} />
+        {card.project ? (
+          <span className="mono ml-auto truncate text-[10px] text-tx3">{card.project}</span>
+        ) : null}
       </div>
-      <div className="mt-2 flex items-center gap-2">
-        <span className={`mono rounded px-1.5 py-0.5 text-[11px] ${chip.cls}`}>
+      <p className="mb-2.5 text-[13px] font-medium leading-[1.45] text-tx">{card.title}</p>
+      <div className="mb-2 flex items-center gap-2">
+        <span className="mono rounded-[5px] px-[7px] py-0.5 text-[10px]" style={chip.style}>
           {chip.text}
         </span>
         {isDraft ? (
@@ -44,32 +44,26 @@ export default function TicketCard({ card, index = 0 }: { card: Card; index?: nu
               start.mutate()
             }}
             disabled={start.isPending}
-            className="rounded border border-slate-300 px-1.5 py-0.5 text-[11px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+            className="rounded-[5px] border border-white/[0.14] px-[7px] py-0.5 text-[10px] font-medium text-[#c6ccd8] transition-colors hover:bg-white/5 disabled:opacity-40"
           >
             ▶ Start
           </button>
         ) : card.score != null ? (
-          // Compact on the card; the full I×U×C/E formula lives in the tooltip.
-          <span className="mono text-[11px] text-slate-400" title={card.breakdown}>
+          <span className="mono text-[10px] text-tx3" title={card.breakdown}>
             ▲{Math.round(card.score)}
           </span>
-        ) : (
-          <span className="text-[11px] italic text-slate-300">unscored</span>
-        )}
+        ) : null}
         {card.stale_days != null ? (
           <span
-            className="mono rounded bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-600"
+            className="mono rounded-[5px] px-[7px] py-0.5 text-[10px]"
+            style={CHIP.bad}
             title={`No activity for ${card.stale_days} day(s)`}
           >
             stuck {card.stale_days}d
           </span>
         ) : null}
-        {card.project ? (
-          <span className="mono ml-auto truncate text-[11px] text-violet-600">
-            {card.project}
-          </span>
-        ) : null}
       </div>
+      <LifecycleMeter t={card} />
     </a>
   )
 }

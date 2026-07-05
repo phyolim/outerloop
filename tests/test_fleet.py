@@ -1,25 +1,25 @@
 # Self-contained: hub + 3 workers on one box over loopback, FAKE mode. No deps.
 import os, sys, atexit, shutil, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-fleet-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
-from inbox import db as _bdb
+from outerloop import db as _bdb
 _bdb.init_db()
 # --- test body ---
 import json, threading, time
 from http.server import ThreadingHTTPServer
-from inbox import db, client
-from inbox.coordinator import CoordHandler, scheduler_once
-from inbox import worker as W
+from outerloop import db, client
+from outerloop.hub import HubHandler, scheduler_once
+from outerloop import worker as W
 
 PORT = 8799
 BASE = f"http://127.0.0.1:{PORT}"
 WORKERS = {"pro": ["dev", "repos:*", "heavy"], "air": ["light", "mobile"],
            "mini": ["market-data", "analysis", "always-on"]}
 
-srv = ThreadingHTTPServer(("127.0.0.1", PORT), CoordHandler)
+srv = ThreadingHTTPServer(("127.0.0.1", PORT), HubHandler)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 time.sleep(0.3)
 
@@ -28,11 +28,11 @@ def file_ticket(**kw):
     return client.post(BASE, "/api/tickets", kw)["id"]
 
 
-def run_worker(device):
-    os.environ["INBOX_DEVICE"] = device
-    os.environ["INBOX_CAPABILITIES"] = json.dumps(WORKERS[device])
-    os.environ["INBOX_HUB"] = BASE
-    os.environ.pop("INBOX_DEVICE_TOKEN", None)
+def run_worker(worker):
+    os.environ["OUTERLOOP_WORKER"] = worker
+    os.environ["OUTERLOOP_CAPABILITIES"] = json.dumps(WORKERS[worker])
+    os.environ["OUTERLOOP_HUB"] = BASE
+    os.environ.pop("OUTERLOOP_WORKER_TOKEN", None)
     return W.run_worker_once()
 
 
@@ -74,7 +74,7 @@ assert st(kno)["status"] == "done", f"knowledge not done: {tuple(st(kno))}"
 assert st(junk)["status"] == "parked", f"junk not parked: {tuple(st(junk))}"
 print("OK terminal states: coding=done knowledge=done junk=parked (over the network)")
 
-claims = c.execute("SELECT json_extract(detail,'$.device') dev FROM audit"
+claims = c.execute("SELECT json_extract(detail,'$.worker') dev FROM audit"
                    " WHERE ticket_id=? AND action='claimed'", (cod,)).fetchall()
 devs = {r["dev"] for r in claims}
 assert devs == {"pro"}, f"coding claimed by {devs}, expected only pro (requires=[dev])"
@@ -94,7 +94,7 @@ c.close()
 # --- fencing: a write with a stale epoch is rejected (must-fix #1/#6) ---
 kno2 = file_ticket(title="Quick note", body="x", type="knowledge")
 scheduler_once()  # -> active
-claimed = client.post(BASE, "/api/claim", {"device": "air"})
+claimed = client.post(BASE, "/api/claim", {"worker": "air"})
 assert claimed.get("ticket"), "expected air to claim kno2"
 tid, ep = claimed["ticket"]["id"], claimed["epoch"]
 # simulate a reclaim + re-claim by bumping the ticket's monotonic fence
@@ -114,7 +114,7 @@ print("OK fencing: a write at a superseded epoch is rejected (409) — no stale 
 # --- renew (#6): a valid lease extends; a reclaimed one is rejected before any effect ---
 kno3 = file_ticket(title="Yet another note", body="x", type="knowledge")
 scheduler_once()
-cl = client.post(BASE, "/api/claim", {"device": "mini"})
+cl = client.post(BASE, "/api/claim", {"worker": "mini"})
 assert cl.get("ticket"), "expected mini to claim kno3"
 rtid, rep = cl["ticket"]["id"], cl["epoch"]
 assert client.post(BASE, "/api/lease/renew", {"ticket_id": rtid, "epoch": rep}).get("ok"), "valid renew"
@@ -130,21 +130,21 @@ except client.APIError as e:
 print("OK renew (#6): valid lease extends; a reclaimed lease is rejected before a merge")
 
 # --- caps are HUB-owned: a heartbeat never clobbers them; set_caps (the fleet UI) assigns work ---
-client.post(BASE, "/api/heartbeat", {"device": "pro", "capabilities": ["JUNK"], "version": "z"})
+client.post(BASE, "/api/heartbeat", {"worker": "pro", "capabilities": ["JUNK"], "version": "z"})
 c = db.connect()
-pcaps = lambda: json.loads(c.execute("SELECT capabilities FROM device WHERE name='pro'").fetchone()[0])
+pcaps = lambda: json.loads(c.execute("SELECT capabilities FROM worker WHERE name='pro'").fetchone()[0])
 assert pcaps() == WORKERS["pro"], f"heartbeat clobbered hub-owned caps: {pcaps()}"
-client.post(BASE, "/api/device/pro/control", {"action": "set_caps", "capabilities": ["dev", "repos:*"]})
+client.post(BASE, "/api/worker/pro/control", {"action": "set_caps", "capabilities": ["dev", "repos:*"]})
 assert pcaps() == ["dev", "repos:*"], f"set_caps (fleet UI) did not apply: {pcaps()}"
-client.post(BASE, "/api/heartbeat", {"device": "pro", "capabilities": ["JUNK"], "version": "z"})
+client.post(BASE, "/api/heartbeat", {"worker": "pro", "capabilities": ["JUNK"], "version": "z"})
 assert pcaps() == ["dev", "repos:*"], f"a later heartbeat reverted the human's caps: {pcaps()}"
 c.close()
 print("OK caps hub-owned: heartbeat never clobbers; set_caps (fleet UI) is authoritative")
 
 # --- fleet behavior is hub-owned too: a worker inherits FAKE/merge-policy/model routing
-# from every heartbeat, so one Mac's stray INBOX_FAKE can't fake a real fleet ---
-from inbox import config as _cfg
-hb = client.post(BASE, "/api/heartbeat", {"device": "pro", "capabilities": [], "version": "z"})
+# from every heartbeat, so one Mac's stray OUTERLOOP_FAKE can't fake a real fleet ---
+from outerloop import config as _cfg
+hb = client.post(BASE, "/api/heartbeat", {"worker": "pro", "capabilities": [], "version": "z"})
 assert hb["cfg"]["FAKE"] is True and hb["cfg"]["MODELS"].get("author"), f"heartbeat missing hub cfg: {hb}"
 _cfg.FAKE = False                     # pretend this worker's local env said real mode
 _cfg.apply_hub_cfg(hb["cfg"])
@@ -155,41 +155,41 @@ assert _cfg.FAKE is True
 _cfg.HUB_MODELS = {}                  # restore for the rest of the file
 print("OK hub-owned cfg: worker inherits FAKE + model routing from the heartbeat")
 
-# --- pairing (fleet UI /device-pair): the issued token authenticates ONLY under its own
-# device name — the exact name/token coupling a mismatched worker gets 403 on ---
+# --- pairing (fleet UI /worker-pair): the issued token authenticates ONLY under its own
+# worker name — the exact name/token coupling a mismatched worker gets 403 on ---
 import secrets
-from inbox import auth
+from outerloop import auth
 c = db.connect()
 db.set_setting(c, "require_auth", "on")
 tok = secrets.token_hex(24)
 auth.set_token(c, "laptop", tok)                     # what web._pair does
-assert auth.resolve(c, tok) == "laptop", "paired token must resolve to its device"
+assert auth.resolve(c, tok) == "laptop", "paired token must resolve to its worker"
 assert auth.resolve(c, "wrong") is None, "an unknown token resolves to nothing"
 # name+token must agree (this is the check the API enforces on every heartbeat)
-assert auth.resolve(c, tok) != "pro", "a laptop token must not authenticate as another device"
+assert auth.resolve(c, tok) != "pro", "a laptop token must not authenticate as another worker"
 db.set_setting(c, "require_auth", "off")
 c.close()
-print("OK pairing: issued token authenticates only under its own device name")
+print("OK pairing: issued token authenticates only under its own worker name")
 
-# --- stranded pins: an active ticket pinned to a long-offline device is parked
-# (revivable), instead of sitting 'active' forever with no device able to claim it ---
-from inbox import leasing
+# --- stranded pins: an active ticket pinned to a long-offline worker is parked
+# (revivable), instead of sitting 'active' forever with no worker able to claim it ---
+from outerloop import leasing
 c = db.connect()
 c.execute("INSERT INTO ticket(title, body, type, status, pin, requires)"
           " VALUES('stranded', '', 'knowledge', 'active', 'ghost', '[]')")
 sid = c.execute("SELECT id FROM ticket WHERE title='stranded'").fetchone()["id"]
-c.execute("INSERT INTO device(name, last_seen) VALUES('ghost',"
+c.execute("INSERT INTO worker(name, last_seen) VALUES('ghost',"
           " datetime('now', '-48 hours'))")
 parked = leasing.park_stranded(c, "test")
-assert sid in parked, "ticket pinned to a 48h-offline device must be parked"
+assert sid in parked, "ticket pinned to a 48h-offline worker must be parked"
 row = c.execute("SELECT status, park_reason FROM ticket WHERE id=?", (sid,)).fetchone()
 assert row["status"] == "parked" and "offline" in row["park_reason"]
-# a pin to a RECENTLY-seen device is left alone
-c.execute("UPDATE device SET last_seen=datetime('now') WHERE name='ghost'")
+# a pin to a RECENTLY-seen worker is left alone
+c.execute("UPDATE worker SET last_seen=datetime('now') WHERE name='ghost'")
 c.execute("UPDATE ticket SET status='active' WHERE id=?", (sid,))
-assert leasing.park_stranded(c, "test") == [], "a live pinned device must not be parked"
+assert leasing.park_stranded(c, "test") == [], "a live pinned worker must not be parked"
 c.close()
-print("OK stranded pin: parked after the offline window, untouched while the device is live")
+print("OK stranded pin: parked after the offline window, untouched while the worker is live")
 
 print("\n=== FLEET MULTI-NODE TESTS PASSED ===")
 srv.shutdown()

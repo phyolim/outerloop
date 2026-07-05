@@ -49,7 +49,7 @@ as_out() { if [ "$AS_SUDO" = 1 ]; then sudo -u "$CUSER" env PATH="$PATHENV" /bin
            else env PATH="$PATHENV" /bin/sh -c "$1" 2>/dev/null; fi; }
 
 # --- ALWAYS: python >= 3.9, resolved the SAME way postinstall does (baked path first,
-#     then autodetect) — a mismatch here is exactly what broke the mini install ---
+#     then autodetect) — a mismatch here is exactly what broke the hub install ---
 PYOK=""
 for cand in "$PYTHON" /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3 \
             "$(command -v python3 2>/dev/null || true)"; do
@@ -109,7 +109,7 @@ if [ "$FAKE" = 0 ]; then
   # claude must be runnable by the launchd job. It usually is NOT on the launchd PATH
   # (the Claude Code CLI self-installs to a per-user ~/.local/bin, added by an interactive
   # rc that launchd never sources), so the postinstall resolves it and bakes an ABSOLUTE
-  # INBOX_CLAUDE_BIN. This check therefore PASSES if claude is resolvable ANYWHERE the
+  # OUTERLOOP_CLAUDE_BIN. This check therefore PASSES if claude is resolvable ANYWHERE the
   # postinstall would find it, and fails only if it's truly absent.
   cbin="${CLAUDE_BIN:-}"
   if [ -z "$cbin" ] || [ ! -x "$cbin" ]; then
@@ -126,7 +126,7 @@ if [ "$FAKE" = 0 ]; then
     fi
   fi
   if [ -n "$cbin" ] && [ -x "$cbin" ]; then
-    ok "claude: $cbin (installer bakes this as INBOX_CLAUDE_BIN)"
+    ok "claude: $cbin (installer bakes this as OUTERLOOP_CLAUDE_BIN)"
   else
     bad "claude CLI not found for $CUSER" "install the Claude Code CLI (required for real mode)"
   fi

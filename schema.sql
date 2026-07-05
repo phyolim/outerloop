@@ -1,4 +1,4 @@
--- outerloop schema. Applied idempotently on `python3 -m inbox init`.
+-- outerloop schema. Applied idempotently on `python3 -m outerloop init`.
 -- One SQLite file is the single source of truth AND the coordination primitive.
 
 CREATE TABLE IF NOT EXISTS ticket (
@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS ticket (
     title         TEXT NOT NULL,
     body          TEXT NOT NULL DEFAULT '',
     type          TEXT NOT NULL CHECK(type IN ('coding','knowledge','ops')),
-    kind          TEXT CHECK(kind IN ('feature','bug','chore','research','ops')),  -- user-facing taxonomy; type is derived from it (see inbox/taxonomy.py)
+    kind          TEXT CHECK(kind IN ('feature','bug','chore','research','ops')),  -- user-facing taxonomy; type is derived from it (see outerloop/taxonomy.py)
     status        TEXT NOT NULL DEFAULT 'inbox'
                        CHECK(status IN ('inbox','parked','active','blocked','done','failed')),
     sub_stage     TEXT,                         -- handler-specific stage (NULL until active)
@@ -23,9 +23,9 @@ CREATE TABLE IF NOT EXISTS ticket (
     attempts      INTEGER NOT NULL DEFAULT 0,   -- consecutive ticks with NO state change (stall guard)
     last_stage    TEXT,                         -- bookkeeping for the stall guard
     requires      TEXT NOT NULL DEFAULT '[]',   -- JSON capability tags a worker MUST have to claim
-    prefer        TEXT,                         -- soft device hint (tie-break)
-    pin           TEXT,                         -- hard device requirement (NULL = any capable device)
-    assigned_device TEXT,                       -- device that currently holds it (fleet view + audit)
+    prefer        TEXT,                         -- soft worker hint (tie-break)
+    pin           TEXT,                         -- hard worker requirement (NULL = any capable worker)
+    assigned_worker TEXT,                       -- worker that currently holds it (fleet view + audit)
     claim_epoch   INTEGER NOT NULL DEFAULT 0,   -- monotonic per-ticket fence; bumped on every claim
     dedup_key     TEXT,                         -- producer idempotency key (screener)
     draft         INTEGER NOT NULL DEFAULT 0,   -- 1 = idea not yet submitted; triage/scoring skip it
@@ -45,20 +45,20 @@ CREATE TABLE IF NOT EXISTS lease (
     acquired_at TEXT NOT NULL DEFAULT (datetime('now')),
     expires_at  TEXT NOT NULL,                  -- TTL is the PRIMARY recovery mechanism
     epoch       INTEGER NOT NULL DEFAULT 0,     -- fence value handed to the current holder
-    device      TEXT                            -- claiming device name (distributed)
+    worker      TEXT                            -- claiming worker name (distributed)
 );
 
 -- The fleet: one row per worker machine. capabilities here are the TRUSTED source
 -- for routing (must-fix #5) — never the claim request body.
-CREATE TABLE IF NOT EXISTS device (
+CREATE TABLE IF NOT EXISTS worker (
     name           TEXT PRIMARY KEY,
     capabilities   TEXT NOT NULL DEFAULT '[]',  -- JSON array of capability tags
     status         TEXT NOT NULL DEFAULT 'online'  -- online | paused | draining (offline = stale heartbeat)
                         CHECK(status IN ('online','draining','paused','offline')),
-    target_ticket  INTEGER,                     -- "run this ticket on this device now"
+    target_ticket  INTEGER,                     -- "run this ticket on this worker now"
     current_ticket INTEGER,                     -- what it's running (fleet view)
     version        TEXT,
-    token_hash     TEXT,                        -- per-device bearer token (auth; stage 8)
+    token_hash     TEXT,                        -- per-worker bearer token (auth; stage 8)
     last_seen      TEXT                         -- hub clock; offline detection
 );
 
@@ -145,7 +145,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_event_ticket ON agent_event(ticket_id);
 -- durable record — the audit table is the durable "why of every action".
 CREATE TABLE IF NOT EXISTS request_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    device     TEXT,
+    worker     TEXT,
     method     TEXT NOT NULL,
     path       TEXT NOT NULL,
     status     INTEGER NOT NULL,

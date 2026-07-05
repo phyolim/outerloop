@@ -2,14 +2,14 @@
 # (2) a FAKE run persists agent_event rows the ticket page can render. No deps.
 import os, sys, atexit, shutil, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-events-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 
-from inbox import config, db
-from inbox.agent import _dispatch_event, run_agent
-from inbox.context import Ctx
+from outerloop import config, db
+from outerloop.agent import _dispatch_event, run_agent
+from outerloop.context import Ctx
 
 # --- 1. parser: assistant text + tool_use + tool_result stream to events; the
 #        result envelope is captured, not emitted.

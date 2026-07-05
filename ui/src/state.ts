@@ -10,10 +10,13 @@ export const ui$ = observable({
     body: '',
     project: '',
     repo_path: '',
-    start: false, // checked = skip the draft stage and enter the pipeline now
+    // checked (default) = enter the pipeline now — "drop tickets into one inbox" is
+    // the promise; uncheck to park it as a draft you'll flesh out later.
+    start: true,
   },
 })
 
 export function resetForm() {
-  ui$.form.set({ title: '', kind: 'feature', body: '', project: '', repo_path: '', start: false })
+  // keep `start` — it's a preference, not content; resetting it re-surprises every create
+  ui$.form.assign({ title: '', kind: 'feature', body: '', project: '', repo_path: '' })
 }

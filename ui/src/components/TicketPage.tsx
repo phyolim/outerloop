@@ -9,46 +9,53 @@ import {
   fetchTicket,
   queryKeys,
   retryTicket,
+  reviveTicket,
   saveFactors,
   startTicket,
 } from '../api'
 import type { AgentEvent, AgentRun, DecisionContext, Factors, Kind, ThreadComment, TicketThread } from '../types'
 import { KINDS } from '../types'
 import { ago, fmt } from '../lib'
-import KindBadge from './KindBadge'
-import { BTN, CARD, EmptyState, ErrorBanner, INPUT, Pill, Select, StatusPill } from './ui'
+import { stageDone } from './lifecycle'
+import { BTN, EmptyState, ErrorBanner, INPUT, PANEL, DEEP, STATE_COLOR, STATUS_LABEL, kindColor } from './ui'
 
-// Coding kinds get a repo; research/ops don't. Mirrors inbox/taxonomy.type_for.
+// Coding kinds get a repo; research/ops don't. Mirrors outerloop/taxonomy.type_for.
 const CODING = new Set<Kind>(['feature', 'bug', 'chore'])
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
 
 function ContextBlock({ ctx }: { ctx?: DecisionContext }) {
   if (!ctx || Object.keys(ctx).length === 0) return null
   return (
-    <div className="mt-2 space-y-1 border-t border-slate-100 pt-2 text-[13px]">
+    <div className="mono mt-2.5 flex flex-col gap-1 border-t border-hairline2 pt-2.5 text-[11px]">
       {ctx.pr_url ? (
-        <p>
-          <span className="microlabel mr-1.5">pr</span>
-          <a
-            href={ctx.pr_url}
-            target="_blank"
-            rel="noreferrer"
-            className="mono text-sky-700 hover:underline"
-          >
-            {ctx.pr_url}
+        <span>
+          <span className="mr-3 text-tx3">pr</span>
+          <a href={ctx.pr_url} target="_blank" rel="noreferrer" className="text-info hover:text-[#8ecbfa]">
+            {ctx.pr_url.replace(/^https?:\/\//, '')}
           </a>
-        </p>
+        </span>
       ) : null}
-      {ctx.diff_stat ? <p className="mono text-xs text-slate-400">{ctx.diff_stat}</p> : null}
+      {ctx.diff_stat ? (
+        <span className="text-tx3">
+          <span className="mr-1.5">diff</span>
+          <span className="text-tx2">{ctx.diff_stat}</span>
+        </span>
+      ) : null}
       {'checks_green' in ctx ? (
-        <p>
-          <span className="microlabel mr-1.5">checks</span>
-          <span className={`mono text-xs font-semibold ${ctx.checks_green ? 'text-emerald-600' : 'text-red-600'}`}>
+        <span className="text-tx3">
+          <span className="mr-1.5">checks</span>
+          <span className={`font-semibold ${ctx.checks_green ? 'text-acc' : 'text-bad'}`}>
             {ctx.checks ?? '?'}
           </span>
-        </p>
+        </span>
       ) : null}
       {ctx.findings && ctx.findings.length ? (
-        <ul className="list-disc pl-5 text-slate-600">
+        <ul className="list-disc pl-5 font-sans text-[12px] text-tx2">
           {ctx.findings.map((f, i) => (
             <li key={i}>{f}</li>
           ))}
@@ -58,42 +65,48 @@ function ContextBlock({ ctx }: { ctx?: DecisionContext }) {
   )
 }
 
-/* Thread avatars: who is speaking, at a glance. */
+/* Thread voices: who is speaking, at a glance. */
 const AUTHOR = {
-  claude: { initial: 'C', avatar: 'bg-sky-600', tag: 'claude' },
-  you: { initial: 'Y', avatar: 'bg-slate-700', tag: 'you' },
-  system: { initial: '!', avatar: 'bg-red-500', tag: 'system' },
+  claude: { tag: 'claude', color: '#5eb1f7' },
+  you: { tag: 'you', color: '#a78bfa' },
+  system: { tag: 'system', color: '#f26d6d' },
 } as const
 
 function Comment({ c, i }: { c: ThreadComment; i: number }) {
   const a = AUTHOR[c.author]
+  const verdictStyle =
+    c.verdict === 'approved'
+      ? { background: 'rgba(61,220,132,0.12)', color: '#3ddc84' }
+      : c.verdict === 'rework'
+        ? { background: 'rgba(245,184,67,0.14)', color: '#f5b843' }
+        : { background: 'rgba(242,109,109,0.12)', color: '#f26d6d' }
   return (
-    <div className="card-enter relative flex gap-3" style={{ animationDelay: `${Math.min(i, 8) * 50}ms` }}>
-      <div
-        className={`mono z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white ${a.avatar}`}
-      >
-        {a.initial}
+    <div
+      className={`card-enter ${PANEL} px-3.5 py-3`}
+      style={{ animationDelay: `${Math.min(i, 8) * 50}ms` }}
+    >
+      <div className="mb-1.5 flex flex-wrap items-center gap-2 text-[11px]">
+        <span className="mono font-semibold" style={{ color: a.color }}>
+          {a.tag}
+        </span>
+        {c.kind && c.kind !== 'clarification' && c.kind !== 'error' ? (
+          <span className="mono rounded-[5px] bg-white/[0.06] px-1.5 py-px text-[10px] text-tx2">
+            {c.kind}
+          </span>
+        ) : null}
+        {c.verdict ? (
+          <span className="mono rounded-[5px] px-1.5 py-px text-[10px] font-semibold" style={verdictStyle}>
+            {c.verdict}
+          </span>
+        ) : null}
+        <span className="mono ml-auto text-[10px] text-tx3">{fmt(c.at)}</span>
       </div>
-      <div className={`${CARD} mb-3 min-w-0 flex-1 p-3`}>
-        <div className="mb-1 flex flex-wrap items-center gap-2 text-xs">
-          <span className="font-semibold text-slate-800">{a.tag}</span>
-          {c.kind && c.kind !== 'clarification' && c.kind !== 'error' ? (
-            <span className="mono rounded bg-slate-100 px-1.5 py-0.5 text-slate-500">{c.kind}</span>
-          ) : null}
-          {c.verdict ? (
-            <Pill tone={c.verdict === 'approved' ? 'green' : c.verdict === 'rework' ? 'amber' : 'red'}>
-              {c.verdict}
-            </Pill>
-          ) : null}
-          <span className="mono ml-auto text-slate-400">{fmt(c.at)}</span>
-        </div>
-        {c.body ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">{c.body}</p>
-        ) : (
-          <p className="text-sm italic text-slate-400">(no note)</p>
-        )}
-        <ContextBlock ctx={c.context} />
-      </div>
+      {c.body ? (
+        <p className="whitespace-pre-wrap text-[13px] leading-[1.6] text-[#c6ccd8]">{c.body}</p>
+      ) : (
+        <p className="text-[13px] italic text-tx3">(no note)</p>
+      )}
+      <ContextBlock ctx={c.context} />
     </div>
   )
 }
@@ -117,7 +130,7 @@ function DraftEditor({
     onSuccess: onDone,
   })
   return (
-    <div className={`card-enter ${CARD} mb-6 p-3.5`}>
+    <div className={`card-enter ${PANEL} mb-4 p-3.5`}>
       <p className="microlabel mb-2">edit draft</p>
       <input
         value={f.title}
@@ -127,16 +140,17 @@ function DraftEditor({
       <div className="mb-3 flex flex-wrap gap-1.5">
         {KINDS.map((k) => {
           const active = f.kind === k.kind
+          const bright = kindColor(k.kind)
           return (
             <button
               key={k.kind}
               type="button"
               onClick={() => setF((v) => ({ ...v, kind: k.kind }))}
-              className="rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors"
+              className="rounded-[7px] border px-2.5 py-1 text-[11px] font-semibold transition-colors"
               style={
                 active
-                  ? { backgroundColor: k.color, color: 'white', borderColor: k.color }
-                  : { color: k.color, borderColor: '#e2e8f0' }
+                  ? { background: `${bright}1f`, color: bright, borderColor: bright }
+                  : { color: bright, borderColor: 'rgba(255,255,255,0.12)' }
               }
             >
               {k.label}
@@ -178,7 +192,7 @@ function DraftEditor({
         <button onClick={onDone} className={BTN.subtle}>
           Cancel
         </button>
-        {save.isError ? <span className="text-xs text-red-600">Failed to save.</span> : null}
+        {save.isError ? <span className="text-xs text-bad">Failed to save.</span> : null}
       </div>
     </div>
   )
@@ -186,7 +200,8 @@ function DraftEditor({
 
 const FACTOR_KEYS = ['impact', 'urgency', 'confidence', 'effort'] as const
 
-function PriorityEditor({
+/* Priority as 5-pip bars — click a pip to set the value, Save persists. */
+function PriorityPanel({
   id,
   factors,
   breakdown,
@@ -203,6 +218,7 @@ function PriorityEditor({
     confidence: factors.confidence ?? 3,
     effort: factors.effort ?? 3,
   })
+  const [dirty, setDirty] = useState(false)
   const save = useMutation({
     mutationFn: () =>
       saveFactors({
@@ -212,40 +228,83 @@ function PriorityEditor({
         confidence: vals.confidence,
         effort: vals.effort,
       }),
-    onSuccess: onSaved,
+    onSuccess: () => {
+      setDirty(false)
+      onSaved()
+    },
   })
   return (
-    <div className={`${CARD} mb-6 p-3.5`}>
-      <p className="microlabel mb-2">priority</p>
-      <div className="flex flex-wrap items-center gap-3">
+    <div className={`${PANEL} px-3.5 py-3`}>
+      <p className="microlabel mb-2.5">priority</p>
+      <div className="mono flex flex-col gap-[7px] text-[11px]">
         {FACTOR_KEYS.map((k) => (
-          <label key={k} className="flex items-center gap-1.5 text-xs text-slate-500">
-            {k}
-            <Select
-              value={vals[k]}
-              onChange={(e) => setVals((v) => ({ ...v, [k]: Number(e.target.value) }))}
-              className="w-[4.25rem]"
-            >
+          <div key={k} className="flex items-center gap-2">
+            <span className="w-[76px] text-tx3">{k}</span>
+            <div className="flex flex-1 gap-[3px]">
               {[1, 2, 3, 4, 5].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
+                <button
+                  key={n}
+                  title={`${k} = ${n}`}
+                  onClick={() => {
+                    setVals((v) => ({ ...v, [k]: n }))
+                    setDirty(true)
+                  }}
+                  className="h-[5px] flex-1 rounded-[2px] transition-colors"
+                  style={{
+                    background: n <= vals[k] ? '#5eb1f7' : 'rgba(255,255,255,0.08)',
+                  }}
+                />
               ))}
-            </Select>
-          </label>
+            </div>
+            <span className="w-3 text-right text-[#c6ccd8]">{vals[k]}</span>
+          </div>
         ))}
-        <button
-          onClick={() => save.mutate()}
-          disabled={save.isPending}
-          className={`${BTN.subtle} px-3 py-1 text-xs`}
-        >
-          {save.isPending ? 'Saving…' : 'Save'}
-        </button>
-        {breakdown ? (
-          <span className="mono ml-auto text-[11px] text-slate-400">{breakdown}</span>
-        ) : (
-          <span className="text-[11px] italic text-slate-300">unscored</span>
-        )}
+        <div className="mt-1 flex items-center justify-between">
+          {breakdown ? (
+            <span className="text-tx3">{breakdown}</span>
+          ) : (
+            <span className="italic text-tx3">unscored</span>
+          )}
+          {dirty ? (
+            <button
+              onClick={() => save.mutate()}
+              disabled={save.isPending}
+              className="rounded-[5px] border border-white/[0.14] px-2 py-0.5 font-sans text-[11px] text-[#c6ccd8] transition-colors hover:bg-white/5 disabled:opacity-40"
+            >
+              {save.isPending ? 'Saving…' : 'Save'}
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/* Vertical lifecycle checklist: ● done, ◔ current, ○ future. Coding only. */
+const LIFECYCLE = ['seed', 'groomed', 'implemented', 'reviewed', 'pr open', 'merge gate', 'merged']
+
+function LifecyclePanel({ ticket }: { ticket: TicketThread['ticket'] }) {
+  if (!CODING.has(ticket.kind)) return null
+  const done = stageDone(ticket)
+  const current = ticket.status === 'active' || ticket.status === 'blocked' ? done : -1
+  return (
+    <div className={`${PANEL} px-3.5 py-3`}>
+      <p className="microlabel mb-2.5">lifecycle</p>
+      <div className="flex flex-col gap-1.5">
+        {LIFECYCLE.map((name, i) => {
+          const state = i < done ? 'done' : i === current ? 'current' : 'future'
+          const dot = state === 'current' ? '◔' : state === 'done' ? '●' : '○'
+          const dotColor = state === 'current' ? '#f5b843' : state === 'done' ? '#3ddc84' : '#3a3f4a'
+          const color = state === 'current' ? '#f5b843' : state === 'done' ? '#9aa2b1' : '#5d6470'
+          return (
+            <div key={name} className="mono flex items-center gap-2 text-[11px]">
+              <span className="w-2.5 text-center" style={{ color: dotColor }}>
+                {dot}
+              </span>
+              <span style={{ color }}>{name}</span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -254,35 +313,37 @@ function PriorityEditor({
 /* What claude is doing right now: the streamed back-and-forth of the agent run.
    flex-col-reverse + newest-first data keeps the scroll pinned to the latest event. */
 const EVENT_KIND = {
-  text: { tag: 'claude', cls: 'text-sky-700' },
-  tool: { tag: 'tool →', cls: 'text-amber-700' },
-  tool_result: { tag: '← result', cls: 'text-slate-400' },
+  text: { tag: 'claude', color: '#5eb1f7' },
+  tool: { tag: 'tool →', color: '#f5b843' },
+  tool_result: { tag: '← result', color: '#5d6470' },
 } as const
 
 function ActivityFeed({ events, live }: { events: AgentEvent[]; live: boolean }) {
   return (
-    <div className="mb-6">
+    <div className="mb-4">
       <p className="microlabel mb-2">
-        activity
-        {live ? <span className="ml-1.5 animate-pulse font-semibold text-emerald-600">· live</span> : null}
+        agent activity
+        {live ? <span className="ml-1.5 animate-pulse font-semibold normal-case tracking-normal text-acc">· live</span> : null}
       </p>
-      <div className={`${CARD} flex max-h-80 flex-col-reverse overflow-y-auto`}>
+      <div className={`${DEEP} flex max-h-80 flex-col-reverse overflow-y-auto`}>
         {[...events].reverse().map((e, i) => {
-          const k = EVENT_KIND[e.kind as keyof typeof EVENT_KIND] ?? {
-            tag: e.kind,
-            cls: 'text-slate-500',
-          }
+          const k = EVENT_KIND[e.kind as keyof typeof EVENT_KIND] ?? { tag: e.kind, color: '#9aa2b1' }
           return (
-            <div key={events.length - i} className="flex gap-2 border-t border-slate-100 px-3 py-1.5 text-xs last:border-0">
-              <span className={`mono w-16 shrink-0 font-semibold ${k.cls}`}>{k.tag}</span>
+            <div
+              key={events.length - i}
+              className="flex gap-2.5 border-t border-hairline2 px-3 py-[7px] text-xs first:border-0"
+            >
+              <span className="mono w-16 shrink-0 text-[11px] font-semibold" style={{ color: k.color }}>
+                {k.tag}
+              </span>
               <span
-                className={`min-w-0 flex-1 whitespace-pre-wrap break-words text-slate-700 ${
-                  e.kind === 'text' ? '' : 'mono line-clamp-2 text-slate-500'
+                className={`min-w-0 flex-1 whitespace-pre-wrap break-words text-xs ${
+                  e.kind === 'text' ? 'text-[#c6ccd8]' : 'mono line-clamp-2 text-tx2'
                 }`}
               >
                 {e.body}
               </span>
-              <span className="mono w-14 shrink-0 text-right text-slate-400" title={fmt(e.at)}>
+              <span className="mono w-[52px] shrink-0 text-right text-[10px] text-tx3" title={fmt(e.at)}>
                 {ago(e.at)}
               </span>
             </div>
@@ -296,35 +357,23 @@ function ActivityFeed({ events, live }: { events: AgentEvent[]; live: boolean })
 function RunsPanel({ runs }: { runs: AgentRun[] }) {
   const total = runs.reduce((s, r) => s + r.tokens_in + r.tokens_out, 0)
   return (
-    <details className="mt-6">
-      <summary className="microlabel cursor-pointer select-none">
-        agent runs · {runs.length} · {total.toLocaleString()} tokens
-      </summary>
-      <div className={`${CARD} mt-2 overflow-hidden`}>
+    <div className={`${PANEL} px-3.5 py-3`}>
+      <p className="microlabel mb-2.5">agent runs · {fmtTokens(total)} tok</p>
+      <div className="mono flex flex-col gap-1.5 text-[11px]">
         {runs.map((r, i) => (
           <div
             key={i}
-            className="mono flex items-center gap-3 border-b border-slate-100 px-3 py-1.5 text-xs last:border-0"
+            className="flex justify-between"
+            title={`${r.model ?? '—'} · exit ${r.exit_code ?? '…'} · ${fmt(r.at)}`}
           >
-            <span className="w-16 shrink-0 font-semibold text-slate-700">{r.role}</span>
-            <span className="min-w-0 flex-1 truncate text-slate-400">{r.model ?? '—'}</span>
-            <span
-              className={`w-8 shrink-0 text-center ${
-                r.exit_code === 0 ? 'text-emerald-600' : r.exit_code == null ? 'text-slate-300' : 'text-red-600'
-              }`}
-            >
-              {r.exit_code ?? '…'}
+            <span className={r.exit_code != null && r.exit_code !== 0 ? 'text-bad' : 'text-tx2'}>
+              {r.role}
             </span>
-            <span className="w-24 shrink-0 text-right tabular-nums text-slate-500">
-              {(r.tokens_in + r.tokens_out).toLocaleString()} tok
-            </span>
-            <span className="w-14 shrink-0 text-right text-slate-400" title={fmt(r.at)}>
-              {ago(r.at)}
-            </span>
+            <span className="text-tx3">{fmtTokens(r.tokens_in + r.tokens_out)}</span>
           </div>
         ))}
       </div>
-    </details>
+    </div>
   )
 }
 
@@ -334,14 +383,13 @@ export default function TicketPage({ id }: { id: number }) {
   const { data, isError } = useQuery({
     queryKey: queryKeys.ticket(id),
     queryFn: () => fetchTicket(id),
-    // stop polling once we know the item doesn't exist
-    refetchInterval: (q) => (q.state.data === null ? false : 4000),
   })
 
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: queryKeys.ticket(id) })
     qc.invalidateQueries({ queryKey: queryKeys.decisions() })
-    qc.invalidateQueries({ queryKey: ['board'] })
+    qc.invalidateQueries({ queryKey: ['tickets'] })
+    qc.invalidateQueries({ queryKey: queryKeys.inbox() })
   }
 
   const answer = useMutation({
@@ -355,6 +403,7 @@ export default function TicketPage({ id }: { id: number }) {
   const dismiss = useMutation({ mutationFn: () => dismissTicket(id), onSuccess: invalidate })
   const close = useMutation({ mutationFn: () => closeTicket(id), onSuccess: invalidate })
   const start = useMutation({ mutationFn: () => startTicket(id), onSuccess: invalidate })
+  const revive = useMutation({ mutationFn: () => reviveTicket(id), onSuccess: invalidate })
   const [editing, setEditing] = useState(false)
   const [opNote, setOpNote] = useState('')
   const comment = useMutation({
@@ -370,237 +419,293 @@ export default function TicketPage({ id }: { id: number }) {
     return (
       <EmptyState glyph="?" title={`Item #${id} not found`} hint="It may have been deleted." />
     )
-  if (!data) return <p className="text-sm text-slate-400">Loading…</p>
+  if (!data) return <p className="text-[13px] text-tx3">Loading…</p>
 
   const { ticket, comments, pending, failed, steps, factors, breakdown, runs, events } = data
   const decisionId = pending?.decision_id
   const isDraft = ticket.status === 'inbox' && ticket.draft
+  const state = isDraft ? 'draft' : ticket.status
+  const kc = kindColor(ticket.kind, ticket.kind_color)
 
   return (
-    <div className="mx-auto max-w-3xl">
-      {/* Breadcrumb + identity */}
-      <nav className="mono mb-2 text-xs text-slate-400">
-        <a href="#/" className="transition-colors hover:text-slate-600">
+    <div>
+      {/* Breadcrumb */}
+      <nav className="mono mb-3 text-[11px] text-tx3">
+        <a href="/" className="text-tx3 transition-colors hover:text-tx2">
           board
         </a>
-        <span className="mx-1">/</span>
-        <span className="text-slate-600">#{ticket.id}</span>
+        <span className="mx-1.5">/</span>
+        <span className="text-tx2">#{ticket.id}</span>
       </nav>
 
-      <header className="mb-5">
-        <div className="flex items-start justify-between gap-3">
-          <h1 className="text-xl font-semibold leading-snug tracking-tight">{ticket.title}</h1>
-          <KindBadge label={ticket.kind_label} color={ticket.kind_color} />
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          {isDraft ? (
-            <Pill tone="slate" dot>
-              Draft
-            </Pill>
-          ) : (
-            <StatusPill status={ticket.status} pulse={ticket.status === 'active'} />
-          )}
-          {ticket.sub_stage ? (
-            <span className="mono rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
-              {ticket.sub_stage}
-            </span>
-          ) : null}
-          {ticket.project ? (
-            <span className="mono text-[11px] text-violet-600">{ticket.project}</span>
-          ) : null}
-          {ticket.status !== 'done' ? (
-            <button
-              onClick={() => {
-                if (window.confirm('Close this ticket? Any running work is stopped and it leaves the queue.'))
-                  close.mutate()
+      <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_264px]">
+        {/* ---- main column ---- */}
+        <div className="min-w-0">
+          <header className="mb-4 flex items-start justify-between gap-3">
+            <h1 className="text-[19px] font-semibold leading-[1.35] tracking-[-0.02em]">
+              {ticket.title}
+            </h1>
+            {ticket.status !== 'done' ? (
+              <button
+                onClick={() => {
+                  if (window.confirm('Close this ticket? Any running work is stopped and it leaves the queue.'))
+                    close.mutate()
+                }}
+                disabled={close.isPending}
+                className="shrink-0 text-xs text-tx3 underline-offset-2 transition-colors hover:text-bad hover:underline disabled:opacity-40"
+                title="No longer relevant — stop any running work and mark it done"
+              >
+                {close.isPending ? 'Closing…' : 'Close ticket'}
+              </button>
+            ) : null}
+          </header>
+
+          {editing && isDraft ? (
+            <DraftEditor
+              ticket={ticket}
+              onDone={() => {
+                setEditing(false)
+                invalidate()
               }}
-              disabled={close.isPending}
-              className="ml-auto text-xs text-slate-400 underline-offset-2 transition-colors hover:text-red-600 hover:underline disabled:opacity-40"
-              title="No longer relevant — stop any running work and mark it done"
-            >
-              {close.isPending ? 'Closing…' : 'Close ticket'}
-            </button>
+            />
+          ) : ticket.body ? (
+            <div className={`${PANEL} mb-4 px-3.5 py-3`}>
+              <p className="microlabel mb-1.5">description</p>
+              <p className="whitespace-pre-wrap text-[13px] leading-[1.6] text-[#c6ccd8]">
+                {ticket.body}
+              </p>
+            </div>
+          ) : null}
+
+          {events.length ? <ActivityFeed events={events} live={ticket.status === 'active'} /> : null}
+
+          <p className="microlabel mb-2">thread</p>
+          <div className="mb-4 flex flex-col gap-2.5">
+            {comments.length === 0 ? (
+              <p className="text-[13px] text-tx3">No comments yet.</p>
+            ) : (
+              comments.map((c, i) => <Comment key={i} c={c} i={i} />)
+            )}
+          </div>
+
+          {/* Reply / action zone — what the human can do next. */}
+          {isDraft ? (
+            <div className="card-enter rounded-[10px] border border-white/[0.14] bg-white/[0.02] p-3.5">
+              <p className="mono mb-2.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-tx2">
+                draft
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <button onClick={() => start.mutate()} disabled={start.isPending} className={BTN.go}>
+                  ▶ Start work
+                </button>
+                <button onClick={() => setEditing((e) => !e)} className={BTN.subtle}>
+                  {editing ? 'Close editor' : 'Edit'}
+                </button>
+                <span className="text-xs text-tx3">
+                  Start submits it to the pipeline — triage picks it up on the next tick.
+                </span>
+                {start.isError ? <span className="text-xs text-bad">Failed.</span> : null}
+              </div>
+            </div>
+          ) : pending && pending.kind === 'clarification' ? (
+            <div className="card-enter rounded-[10px] border border-info/30 bg-info/5 p-3.5">
+              <p className="mono mb-2.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-info">
+                ? your reply
+              </p>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={3}
+                placeholder="Answer claude's question — sending resumes the worker."
+                className={`${INPUT} w-full`}
+              />
+              <div className="mt-2.5 flex items-center gap-2">
+                <button
+                  onClick={() => answer.mutate({ decision_id: decisionId!, action: 'approve', note })}
+                  disabled={answer.isPending || !note.trim()}
+                  className={BTN.primary}
+                >
+                  {answer.isPending ? 'Sending…' : 'Send reply'}
+                </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm('Decline to answer? The ticket will be marked failed — you can retry it later.'))
+                      answer.mutate({ decision_id: decisionId!, action: 'reject', note: '' })
+                  }}
+                  disabled={answer.isPending}
+                  className={BTN.subtle}
+                  title="Not worth answering — the ticket fails instead of waiting forever"
+                >
+                  Decline
+                </button>
+                <span className="text-xs text-tx3">
+                  The worker picks this ticket up again on the next tick.
+                </span>
+                {answer.isError ? <span className="text-xs text-bad">Failed to send.</span> : null}
+              </div>
+            </div>
+          ) : pending ? (
+            <div className="card-enter rounded-[10px] border border-warn/30 bg-warn/5 p-3.5">
+              <p className="mono mb-2.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-warn">
+                ⏸ decision · {pending.kind}
+              </p>
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="comment (required for Request changes)"
+                className={`${INPUT} mb-2.5 w-full`}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => answer.mutate({ decision_id: decisionId!, action: 'approve', note })}
+                  disabled={answer.isPending}
+                  className={BTN.go}
+                >
+                  {pending.kind === 'merge_gate' || pending.kind === 'merge' ? 'Approve & merge' : 'Approve'}
+                </button>
+                <button
+                  onClick={() => answer.mutate({ decision_id: decisionId!, action: 'rework', note })}
+                  disabled={answer.isPending || !note.trim()}
+                  className={BTN.subtle}
+                  title="Send your comment back to the worker for another pass — neither approves nor stops the work"
+                >
+                  Request changes
+                </button>
+                <button
+                  onClick={() => answer.mutate({ decision_id: decisionId!, action: 'reject', note })}
+                  disabled={answer.isPending}
+                  className={BTN.danger}
+                  title="Stop: the ticket is closed or failed depending on the gate"
+                >
+                  Reject
+                </button>
+                {answer.isError ? <span className="text-xs text-bad">Failed.</span> : null}
+              </div>
+            </div>
+          ) : failed ? (
+            <div className="card-enter rounded-[10px] border border-bad/30 bg-bad/5 p-3.5">
+              <p className="mono mb-2.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-bad">
+                ! failed
+              </p>
+              {steps.length ? (
+                <ol className="mono mb-3 space-y-0.5 text-xs text-tx2">
+                  {steps.map((s, i) => (
+                    <li key={i} className="truncate">
+                      <span className="font-semibold text-[#c6ccd8]">{s.action}</span> — {s.reason}
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+              <div className="flex items-center gap-2">
+                <button onClick={() => retry.mutate()} disabled={retry.isPending} className={BTN.primary}>
+                  Retry
+                </button>
+                <button onClick={() => dismiss.mutate()} disabled={dismiss.isPending} className={BTN.subtle}>
+                  Dismiss
+                </button>
+                <span className="text-xs text-tx3">Retry re-runs the stage; Dismiss closes it.</span>
+              </div>
+            </div>
+          ) : ticket.status === 'parked' ? (
+            <div className="card-enter rounded-[10px] border border-white/[0.14] bg-white/[0.02] p-3.5">
+              <p className="mono mb-2.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-tx2">
+                ⏸ on hold
+              </p>
+              <div className="flex items-center gap-2">
+                <button onClick={() => revive.mutate()} disabled={revive.isPending} className={BTN.primary}>
+                  Restore to backlog
+                </button>
+                <span className="text-xs text-tx3">
+                  Triage set this aside — restoring sends it back to the backlog for scoring.
+                </span>
+                {revive.isError ? <span className="text-xs text-bad">Failed.</span> : null}
+              </div>
+            </div>
+          ) : (
+            <p className="mono text-xs text-tx3">
+              — nothing to answer right now; the worker has it —
+            </p>
+          )}
+
+          {/* Operator note: steer the item without waiting to be asked. Hidden while a
+              clarification is pending — the reply box IS the note channel then. */}
+          {!pending ? (
+            <div className="mt-4">
+              <textarea
+                value={opNote}
+                onChange={(e) => setOpNote(e.target.value)}
+                rows={2}
+                placeholder="Add a note — shown here and passed to the worker on its next run."
+                className={`${INPUT} w-full`}
+              />
+              <div className="mt-1.5 flex items-center gap-2">
+                <button
+                  onClick={() => comment.mutate()}
+                  disabled={comment.isPending || !opNote.trim()}
+                  className={`${BTN.subtle} px-3 py-1 text-xs`}
+                >
+                  {comment.isPending ? 'Adding…' : 'Add note'}
+                </button>
+                {comment.isError ? <span className="text-xs text-bad">Failed.</span> : null}
+              </div>
+            </div>
           ) : null}
         </div>
-      </header>
 
-      {editing && isDraft ? (
-        <DraftEditor
-          ticket={ticket}
-          onDone={() => {
-            setEditing(false)
-            invalidate()
-          }}
-        />
-      ) : ticket.body ? (
-        <div className={`${CARD} mb-6 p-3.5`}>
-          <p className="microlabel mb-1.5">description</p>
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
-            {ticket.body}
-          </p>
-        </div>
-      ) : null}
+        {/* ---- meta rail ---- */}
+        <aside className="flex flex-col gap-3">
+          <div className={`${PANEL} px-3.5 py-3`}>
+            <p className="microlabel mb-2.5">status</p>
+            <div className="mono flex flex-col gap-2 text-[11px]">
+              <span className="flex justify-between">
+                <span className="text-tx3">state</span>
+                <span className="font-semibold" style={{ color: STATE_COLOR[state] ?? '#c6ccd8' }}>
+                  ● {STATUS_LABEL[state] ?? state}
+                </span>
+              </span>
+              {ticket.sub_stage ? (
+                <span className="flex justify-between">
+                  <span className="text-tx3">stage</span>
+                  <span className="text-[#c6ccd8]">{ticket.sub_stage}</span>
+                </span>
+              ) : null}
+              <span className="flex justify-between">
+                <span className="text-tx3">kind</span>
+                <span style={{ color: kc }}>{ticket.kind}</span>
+              </span>
+              {ticket.project ? (
+                <span className="flex justify-between">
+                  <span className="text-tx3">project</span>
+                  <span className="text-proj">{ticket.project}</span>
+                </span>
+              ) : null}
+              {ticket.repo_path ? (
+                <span className="flex justify-between gap-2">
+                  <span className="text-tx3">repo</span>
+                  <span className="truncate text-[#c6ccd8]" title={ticket.repo_path}>
+                    {ticket.repo_path}
+                  </span>
+                </span>
+              ) : null}
+            </div>
+          </div>
 
-      {/* key on breakdown: if the scorer (or another client) rescored while this page
-          was open, remount so the selects resync instead of silently overwriting
-          fresh factors with stale defaults on Save. */}
-      <PriorityEditor
-        key={breakdown || 'unscored'}
-        id={id}
-        factors={factors}
-        breakdown={breakdown}
-        onSaved={invalidate}
-      />
+          <LifecyclePanel ticket={ticket} />
 
-      {events.length ? <ActivityFeed events={events} live={ticket.status === 'active'} /> : null}
+          {/* key on breakdown: if the scorer (or another client) rescored while this page
+              was open, remount so the pips resync instead of silently overwriting
+              fresh factors with stale defaults on Save. */}
+          <PriorityPanel
+            key={breakdown || 'unscored'}
+            id={id}
+            factors={factors}
+            breakdown={breakdown}
+            onSaved={invalidate}
+          />
 
-      <p className="microlabel mb-3">comments</p>
-      {/* Timeline rail connects the conversation. */}
-      <div className="relative">
-        {comments.length > 1 ? (
-          <i className="absolute bottom-3 left-3.5 top-1 w-px bg-slate-200" />
-        ) : null}
-        {comments.length === 0 ? (
-          <p className="mb-4 text-sm text-slate-400">No comments yet.</p>
-        ) : (
-          comments.map((c, i) => <Comment key={i} c={c} i={i} />)
-        )}
+          {runs.length ? <RunsPanel runs={runs} /> : null}
+        </aside>
       </div>
-
-      {/* Reply / action zone — what the human can do next. */}
-      {isDraft ? (
-        <div className="card-enter rounded-xl border border-slate-300 bg-slate-50/70 p-3.5">
-          <p className="microlabel mb-2">draft</p>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => start.mutate()}
-              disabled={start.isPending}
-              className={BTN.go}
-            >
-              ▶ Start work
-            </button>
-            <button onClick={() => setEditing((e) => !e)} className={BTN.subtle}>
-              {editing ? 'Close editor' : 'Edit'}
-            </button>
-            <span className="text-xs text-slate-400">
-              Start submits it to the pipeline — triage picks it up on the next tick.
-            </span>
-            {start.isError ? <span className="text-xs text-red-600">Failed.</span> : null}
-          </div>
-        </div>
-      ) : pending && pending.kind === 'clarification' ? (
-        <div className="card-enter rounded-xl border border-sky-200 bg-sky-50/70 p-3.5">
-          <p className="microlabel mb-2 !text-sky-600">your reply</p>
-          <textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            rows={3}
-            placeholder="Answer claude's question — sending resumes the worker."
-            className={`${INPUT} w-full`}
-          />
-          <div className="mt-2 flex items-center gap-2">
-            <button
-              onClick={() => answer.mutate({ decision_id: decisionId!, action: 'approve', note })}
-              disabled={answer.isPending || !note.trim()}
-              className={BTN.primary}
-            >
-              {answer.isPending ? 'Sending…' : 'Send reply'}
-            </button>
-            <span className="text-xs text-slate-400">
-              The worker picks this ticket up again on the next tick.
-            </span>
-            {answer.isError ? <span className="text-xs text-red-600">Failed to send.</span> : null}
-          </div>
-        </div>
-      ) : pending ? (
-        <div className="card-enter rounded-xl border border-amber-200 bg-amber-50/70 p-3.5">
-          <p className="microlabel mb-2 !text-amber-600">decision · {pending.kind}</p>
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="comment (required for Request changes)"
-            className={`${INPUT} mb-2 w-full`}
-          />
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => answer.mutate({ decision_id: decisionId!, action: 'approve', note })}
-              disabled={answer.isPending}
-              className={BTN.go}
-            >
-              Approve
-            </button>
-            <button
-              onClick={() => answer.mutate({ decision_id: decisionId!, action: 'rework', note })}
-              disabled={answer.isPending || !note.trim()}
-              className={BTN.primary}
-              title="Send your comment back to the worker for another pass — neither approves nor stops the work"
-            >
-              Request changes
-            </button>
-            <button
-              onClick={() => answer.mutate({ decision_id: decisionId!, action: 'reject', note })}
-              disabled={answer.isPending}
-              className={BTN.danger}
-              title="Stop: the ticket is closed or failed depending on the gate"
-            >
-              Reject
-            </button>
-            {answer.isError ? <span className="text-xs text-red-600">Failed.</span> : null}
-          </div>
-        </div>
-      ) : failed ? (
-        <div className="card-enter rounded-xl border border-red-200 bg-red-50/70 p-3.5">
-          <p className="microlabel mb-2 !text-red-600">failed</p>
-          {steps.length ? (
-            <ol className="mono mb-3 space-y-0.5 text-xs text-slate-500">
-              {steps.map((s, i) => (
-                <li key={i} className="truncate">
-                  <span className="font-semibold text-slate-600">{s.action}</span> — {s.reason}
-                </li>
-              ))}
-            </ol>
-          ) : null}
-          <div className="flex items-center gap-2">
-            <button onClick={() => retry.mutate()} disabled={retry.isPending} className={BTN.primary}>
-              Retry
-            </button>
-            <button onClick={() => dismiss.mutate()} disabled={dismiss.isPending} className={BTN.subtle}>
-              Dismiss
-            </button>
-            <span className="text-xs text-slate-400">Retry re-runs the stage; Dismiss closes it.</span>
-          </div>
-        </div>
-      ) : (
-        <p className="mono text-xs text-slate-400">
-          — nothing to answer right now; the worker has it —
-        </p>
-      )}
-
-      {/* Operator note: steer the item without waiting to be asked. Hidden while a
-          clarification is pending — the reply box IS the note channel then. */}
-      {!pending ? (
-        <div className="mt-4">
-          <textarea
-            value={opNote}
-            onChange={(e) => setOpNote(e.target.value)}
-            rows={2}
-            placeholder="Add a note — shown here and passed to the worker on its next run."
-            className={`${INPUT} w-full`}
-          />
-          <div className="mt-1.5 flex items-center gap-2">
-            <button
-              onClick={() => comment.mutate()}
-              disabled={comment.isPending || !opNote.trim()}
-              className={`${BTN.subtle} px-3 py-1 text-xs`}
-            >
-              {comment.isPending ? 'Adding…' : 'Add note'}
-            </button>
-            {comment.isError ? <span className="text-xs text-red-600">Failed.</span> : null}
-          </div>
-        </div>
-      ) : null}
-
-      {runs.length ? <RunsPanel runs={runs} /> : null}
     </div>
   )
 }

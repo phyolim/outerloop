@@ -8,7 +8,7 @@ set -u
 ENVF="/usr/local/outerloop/deploy.env"
 [ -f "$ENVF" ] && . "$ENVF"   # baked defaults (VPS_HOST/TUNNEL_USER/SSH_KEY) + $PYTHON
 PY="${PYTHON:-/usr/bin/python3}"
-SETTINGS="${INBOX_HOME:-$HOME/Library/Application Support/outerloop}/settings.json"
+SETTINGS="${OUTERLOOP_HOME:-$HOME/Library/Application Support/outerloop}/settings.json"
 
 # settings.json overrides the baked deploy.env values (runtime reconfig, no rebuild).
 if [ -f "$SETTINGS" ]; then

@@ -10,13 +10,13 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-notes-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 
-from inbox import config, context, db  # noqa: E402
-from inbox.web import Handler  # noqa: E402
+from outerloop import config, context, db  # noqa: E402
+from outerloop.web import Handler  # noqa: E402
 
 db.init_db()
 conn = db.connect()

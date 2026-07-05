@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # Build a double-clickable .pkg for ONE machine. Run on any Mac with the repo.
 #
-#   ./build-pkg.sh hub --device mini
+#   ./build-pkg.sh hub --worker hub
 #       # Relay (--vps/--ssh-key) and identity (--tokens/--token) are optional: set the
 #       # relay and pair the hub itself afterward in the menu-bar Settings. Bake up front:
-#       # --vps 1.2.3.4.sslip.io --ssh-key ~/.ssh/id_ed25519 --tokens "mini:$(openssl rand -hex 24)"
+#       # --vps 1.2.3.4.sslip.io --ssh-key ~/.ssh/id_ed25519 --tokens "hub:$(openssl rand -hex 24)"
 #
-#   ./build-pkg.sh worker --device pro
+#   ./build-pkg.sh worker --worker worker-1
 #       # --hub, --caps, --token are all optional now: the worker stays idle until you
 #       # set the hub in the menu-bar Settings, caps default to ["dev","repos:*","heavy"]
 #       # (editable in the Fleet UI), and you pair the token from Fleet -> "Pair a new
-#       # device". Bake them up front instead with --hub <url> --token <tok> if you like.
+#       # worker". Bake them up front instead with --hub <url> --token <tok> if you like.
 #
-# Add --real to ship with INBOX_FAKE=0 (only after a FAKE smoke test). Output:
+# Add --real to ship with OUTERLOOP_FAKE=0 (only after a FAKE smoke test). Output:
 # outerloop-<role>.pkg — copy to the machine, double-click, done.
 set -euo pipefail
 
@@ -23,19 +23,19 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 PYTHON="/opt/homebrew/bin/python3"
 PATHENV="/opt/homebrew/bin:/usr/bin:/bin"
 FAKE="1"
-VPS="" SSHKEY="" TUNNEL_USER="tunnel" TOKENS="" DEVICE="" CAPS="[]" HUB="" TOKEN="" MODELS=""
+VPS="" SSHKEY="" TUNNEL_USER="tunnel" TOKENS="" WORKER="" CAPS="[]" HUB="" TOKEN="" MODELS=""
 HOST="127.0.0.1"   # hub bind address; --lan flips it to all-interfaces for LAN access
 ALLOW_NO_CI="0"    # --allow-merge-without-ci: permit merging a repo that has no CI at all
 CLAUDE_BIN=""      # --claude-bin: explicit claude path; empty => postinstall auto-resolves it
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --lan) HOST="0.0.0.0"; shift;;   # LAN-only hub: bind all interfaces, reachable at <mini>.local:8765
+    --lan) HOST="0.0.0.0"; shift;;   # LAN-only hub: bind all interfaces, reachable at <hub>.local:8765
     --vps) VPS="$2"; shift 2;;
     --ssh-key) SSHKEY="$2"; shift 2;;
     --tunnel-user) TUNNEL_USER="$2"; shift 2;;
     --tokens) TOKENS="$2"; shift 2;;
-    --device) DEVICE="$2"; shift 2;;
+    --worker) WORKER="$2"; shift 2;;
     --caps) CAPS="$2"; shift 2;;
     --hub) HUB="$2"; shift 2;;
     --token) TOKEN="$2"; shift 2;;
@@ -55,9 +55,9 @@ done
 
 # Every build bumps the patch version in-place: worker self-update triggers on
 # hub_version != theirs, so a rebuild that keeps the old number never propagates.
-VERSION="$(awk -F'"' '/^__version__/{split($2,v,"."); printf "%s.%s.%s", v[1], v[2], v[3]+1}' "$REPO/inbox/__init__.py")"
-sed -i '' "s/^__version__ = .*/__version__ = \"${VERSION}\"/" "$REPO/inbox/__init__.py"
-echo ">> version ${VERSION} (bumped inbox/__init__.py — commit it so the repo matches the shipped pkg)"
+VERSION="$(awk -F'"' '/^__version__/{split($2,v,"."); printf "%s.%s.%s", v[1], v[2], v[3]+1}' "$REPO/outerloop/__init__.py")"
+sed -i '' "s/^__version__ = .*/__version__ = \"${VERSION}\"/" "$REPO/outerloop/__init__.py"
+echo ">> version ${VERSION} (bumped outerloop/__init__.py — commit it so the repo matches the shipped pkg)"
 
 STAGE="$(mktemp -d)/root"; mkdir -p "$STAGE"
 SCRIPTS="$(mktemp -d)"
@@ -93,7 +93,7 @@ DASH="${HUB:-}"
 [ -z "$DASH" ] && DASH="http://127.0.0.1:8765"
 
 # baked machine config the postinstall reads. Values are single-quoted: postinstall
-# `source`s this file, so an unquoted space (DEVICE_TOKENS, MODELS), glob (CAPS), or
+# `source`s this file, so an unquoted space (WORKER_TOKENS, MODELS), glob (CAPS), or
 # redirection char (< > in a stray HUB_URL) would break sourcing. None of these values
 # contain a single quote, so single-quoting is safe and fully literal.
 cat > "$STAGE/deploy.env" <<EOF
@@ -104,8 +104,8 @@ PATHENV='${PATHENV}'
 SSH_KEY='${SSHKEY}'
 VPS_HOST='${VPS}'
 TUNNEL_USER='${TUNNEL_USER}'
-DEVICE_TOKENS='${TOKENS}'
-DEVICE='${DEVICE}'
+WORKER_TOKENS='${TOKENS}'
+WORKER='${WORKER}'
 CAPS='${CAPS}'
 HUB_URL='${HUB}'
 TOKEN='${TOKEN}'
@@ -125,7 +125,7 @@ cp "$REPO/deploy/mac/scripts/preflight.sh" "$SCRIPTS/preflight.sh"
 cp "$STAGE/deploy.env"                      "$SCRIPTS/deploy.env"
 chmod +x "$SCRIPTS/postinstall" "$SCRIPTS/preinstall" "$SCRIPTS/preflight.sh"
 
-OUT="$REPO/outerloop-${ROLE}${DEVICE:+-$DEVICE}.pkg"
+OUT="$REPO/outerloop-${ROLE}${WORKER:+-$WORKER}.pkg"
 pkgbuild --root "$STAGE" \
          --scripts "$SCRIPTS" \
          --identifier "com.outerloop.${ROLE}" \

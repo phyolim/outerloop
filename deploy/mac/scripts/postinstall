@@ -8,7 +8,7 @@ ENV_FILE="$APPDIR/deploy.env"
 [ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE (pkg built wrong)"; exit 1; }
 # shellcheck disable=SC1090
 . "$ENV_FILE"   # ROLE, FAKE, PYTHON, PATHENV, SSH_KEY, VPS_HOST, TUNNEL_USER,
-                # DEVICE, CAPS, HUB_URL, TOKEN, DEVICE_TOKENS
+                # WORKER, CAPS, HUB_URL, TOKEN, WORKER_TOKENS
 
 PYTHON="${PYTHON:-/opt/homebrew/bin/python3}"
 PATHENV="${PATHENV:-/opt/homebrew/bin:/usr/bin:/bin}"
@@ -30,8 +30,8 @@ CHOME="$(dscl . -read "/Users/$CUSER" NFSHomeDirectory | sed 's/^NFSHomeDirector
 # whatever python3 THIS machine has. Different Macs shelve it differently — Homebrew
 # arm64 (/opt/homebrew), Homebrew Intel (/usr/local), or the CLT system python
 # (/usr/bin). Baking one absolute path made the pkg fail on any machine that didn't
-# match (e.g. a mini with Homebrew but no `brew install python`). The resolved value
-# flows into every inbox call below AND the __PYTHON__ slot in the launchd plists.
+# match (e.g. a hub with Homebrew but no `brew install python`). The resolved value
+# flows into every outerloop call below AND the __PYTHON__ slot in the launchd plists.
 if [ ! -x "$PYTHON" ]; then
   echo "baked python '$PYTHON' not executable here; auto-detecting python3" >&2
   for cand in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3 \
@@ -61,7 +61,7 @@ fi
 if [ -n "${CLAUDE_BIN:-}" ] && [ -x "$CLAUDE_BIN" ]; then
   echo "using claude: $CLAUDE_BIN"
 elif [ "${FAKE:-1}" = "0" ]; then
-  echo "WARNING: real mode (FAKE=0) but no claude found — agents will fail until INBOX_CLAUDE_BIN is set" >&2
+  echo "WARNING: real mode (FAKE=0) but no claude found — agents will fail until OUTERLOOP_CLAUDE_BIN is set" >&2
 fi
 DATA="$CHOME/Library/Application Support/outerloop"
 LA="$CHOME/Library/LaunchAgents"
@@ -73,20 +73,20 @@ install -d -o "$CUSER" -m 755 "$DATA" "$LA"
 chown -R "$CUSER" "$APPDIR"
 
 asuser() { sudo -u "$CUSER" "$@"; }
-inbox()  { asuser env INBOX_HOME="$DATA" PATH="$PATHENV" "$PYTHON" -m inbox "$@"; }
+outerloop()  { asuser env OUTERLOOP_HOME="$DATA" PATH="$PATHENV" "$PYTHON" -m outerloop "$@"; }
 # launchctl into the user's GUI (Aqua) domain: must run inside that user's bootstrap
 # context. From the root postinstall a bare `launchctl bootstrap gui/$CUID` returns
-# "5: Input/output error"; `asuser` fixes it (same reason the inbox calls use it).
+# "5: Input/output error"; `asuser` fixes it (same reason the outerloop calls use it).
 uctl()   { launchctl asuser "$CUID" launchctl "$@"; }
 
 # --- db + auth bootstrap (always; idempotent) ---
-( cd "$APPDIR" && inbox init )
+( cd "$APPDIR" && outerloop init )
 
 if [ "$ROLE" = "hub" ]; then
-  ( cd "$APPDIR" && inbox set-auth on )
-  # Register every device's token (DEVICE_TOKENS="mini:tok pro:tok air:tok").
-  for pair in ${DEVICE_TOKENS:-}; do
-    ( cd "$APPDIR" && inbox set-token "${pair%%:*}" "${pair#*:}" )
+  ( cd "$APPDIR" && outerloop auth on )
+  # Register every worker's token (WORKER_TOKENS="hub:tok worker-1:tok worker-2:tok").
+  for pair in ${WORKER_TOKENS:-}; do
+    ( cd "$APPDIR" && outerloop token "${pair%%:*}" "${pair#*:}" )
   done
 fi
 
@@ -97,17 +97,17 @@ plist_env() { /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:$2" "$1" 2
 render_load() {
   local tpl="$1" out="$LA/$2"
   # On an UPGRADE the plist already exists and may hold identity/config the user set at
-  # runtime in the menu-bar (device name, token, hub, caps, models) — values that live
+  # runtime in the menu-bar (worker name, token, hub, caps, models) — values that live
   # ONLY in the plist, not in settings.json/DB. Re-rendering from the baked deploy.env
-  # would wipe them (a pkg built with empty --token/--device would even DE-PAIR the box).
+  # would wipe them (a pkg built with empty --token/--worker would even DE-PAIR the box).
   # So prefer the existing plist's value for each runtime-owned key over the baked one.
-  local dev="${DEVICE:-}" tok="${TOKEN:-}" hub="${HUB_URL:-}" caps="${CAPS:-[]}" models="${MODELS:-}" p
+  local dev="${WORKER:-}" tok="${TOKEN:-}" hub="${HUB_URL:-}" caps="${CAPS:-[]}" models="${MODELS:-}" p
   if [ -f "$out" ]; then
-    p="$(plist_env "$out" INBOX_DEVICE)";        [ -n "$p" ] && dev="$p"
-    p="$(plist_env "$out" INBOX_DEVICE_TOKEN)";  [ -n "$p" ] && tok="$p"
-    p="$(plist_env "$out" INBOX_HUB)";           [ -n "$p" ] && hub="$p"
-    p="$(plist_env "$out" INBOX_CAPABILITIES)";  [ -n "$p" ] && caps="$p"
-    p="$(plist_env "$out" INBOX_MODELS)";        [ -n "$p" ] && models="$p"
+    p="$(plist_env "$out" OUTERLOOP_WORKER)";        [ -n "$p" ] && dev="$p"
+    p="$(plist_env "$out" OUTERLOOP_WORKER_TOKEN)";  [ -n "$p" ] && tok="$p"
+    p="$(plist_env "$out" OUTERLOOP_HUB)";           [ -n "$p" ] && hub="$p"
+    p="$(plist_env "$out" OUTERLOOP_CAPABILITIES)";  [ -n "$p" ] && caps="$p"
+    p="$(plist_env "$out" OUTERLOOP_MODELS)";        [ -n "$p" ] && models="$p"
   fi
   sed -e "s#__PYTHON__#${PYTHON}#g" \
       -e "s#__PATH__#${PATHENV}#g" \
@@ -118,7 +118,7 @@ render_load() {
       -e "s#__SSH_KEY__#${SSH_KEY:-}#g" \
       -e "s#__VPS_HOST__#${VPS_HOST:-}#g" \
       -e "s#__TUNNEL_USER__#${TUNNEL_USER:-tunnel}#g" \
-      -e "s#__DEVICE__#${dev}#g" \
+      -e "s#__WORKER__#${dev}#g" \
       -e "s#__CAPS__#${caps}#g" \
       -e "s#__HUB_URL__#${hub}#g" \
       -e "s#__TOKEN__#${tok}#g" \
@@ -155,7 +155,7 @@ if [ "$ROLE" = "hub" ]; then
   # turned on at runtime with no rebuild. Idle = no connection, hub stays on loopback.
   render_load com.outerloop.tunnel.plist com.outerloop.tunnel.plist
   [ -n "${VPS_HOST:-}" ] || echo "no VPS_HOST baked: tunnel idle until set in menu-bar Settings (hub on 127.0.0.1:8765)"
-  # the mini runs its own worker too, reaching the hub on loopback
+  # the hub runs its own worker too, reaching the hub on loopback
   HUB_URL="http://127.0.0.1:8765" render_load com.outerloop.worker.plist com.outerloop.worker.plist
 else
   render_load com.outerloop.worker.plist com.outerloop.worker.plist

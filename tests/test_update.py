@@ -1,33 +1,33 @@
 # Self-contained: worker self-update over loopback, FAKE mode. No deps.
 import os, sys, atexit, shutil, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-update-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
-from inbox import db as _bdb
+from outerloop import db as _bdb
 _bdb.init_db()
 # --- test body ---
 import io, tarfile, threading, time
 from http.server import ThreadingHTTPServer
-import inbox
-from inbox import db, client
-from inbox import worker as W
-from inbox.coordinator import CoordHandler
+import outerloop
+from outerloop import db, client
+from outerloop import worker as W
+from outerloop.hub import HubHandler
 
 PORT = 8801
 BASE = f"http://127.0.0.1:{PORT}"
 
-srv = ThreadingHTTPServer(("127.0.0.1", PORT), CoordHandler)
+srv = ThreadingHTTPServer(("127.0.0.1", PORT), HubHandler)
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 time.sleep(0.3)
 
 print("=== worker self-update (hub + worker over loopback, FAKE) ===")
 
 # 1. Heartbeat advertises the hub's version.
-hb = client.post(BASE, "/api/heartbeat", {"device": "pro", "capabilities": [], "version": "old"})
+hb = client.post(BASE, "/api/heartbeat", {"worker": "pro", "capabilities": [], "version": "old"})
 assert "hub_version" in hb, "heartbeat missing hub_version"
-assert hb["hub_version"] == inbox.__version__, f"hub_version {hb['hub_version']} != {inbox.__version__}"
+assert hb["hub_version"] == outerloop.__version__, f"hub_version {hb['hub_version']} != {outerloop.__version__}"
 print(f"OK heartbeat advertises hub_version={hb['hub_version']}")
 
 # 2. GET /api/update returns a valid tar.gz with the right membership (auth off).
@@ -35,18 +35,18 @@ data = client.download(BASE, "/api/update")
 tf = tarfile.open(fileobj=io.BytesIO(data), mode="r:gz")
 names = tf.getnames()
 tf.close()
-assert "inbox/__init__.py" in names, "tarball missing inbox/__init__.py"
+assert "outerloop/__init__.py" in names, "tarball missing outerloop/__init__.py"
 assert "deploy.env" not in names, "tarball leaked deploy.env"
 assert "settings.json" not in names, "tarball leaked settings.json"
 assert not any("data" in n.split("/") for n in names), "tarball leaked a data/ path"
-print(f"OK /api/update tar.gz: {len(names)} members, has inbox/__init__.py, no deploy.env/settings.json/data")
+print(f"OK /api/update tar.gz: {len(names)} members, has outerloop/__init__.py, no deploy.env/settings.json/data")
 
 # 3. Dogfood the worker extractor into a fresh temp dir (NEVER the real tree).
 ext = tempfile.mkdtemp(prefix="inbox-extract-")
 try:
     W._extract_update(data, ext)
-    assert os.path.exists(os.path.join(ext, "inbox", "__init__.py")), "extract did not lay down inbox/__init__.py"
-    print("OK worker extractor lays down inbox/__init__.py under a temp dir")
+    assert os.path.exists(os.path.join(ext, "outerloop", "__init__.py")), "extract did not lay down outerloop/__init__.py"
+    print("OK worker extractor lays down outerloop/__init__.py under a temp dir")
 finally:
     shutil.rmtree(ext, ignore_errors=True)
 
@@ -86,7 +86,7 @@ finally:
 print("OK path-traversal: '../evil.txt' member rejected, nothing written outside the temp dir")
 
 # 6. Version gate. Same version -> no-op (safe to call directly).
-assert W._maybe_self_update(BASE, None, inbox.__version__, "pro") is False, "same version must be a no-op"
+assert W._maybe_self_update(BASE, None, outerloop.__version__, "pro") is False, "same version must be a no-op"
 # Mismatch path -> True, WITHOUT touching the live tree: stub download + extract.
 _orig_extract, _orig_download = W._extract_update, client.download
 try:

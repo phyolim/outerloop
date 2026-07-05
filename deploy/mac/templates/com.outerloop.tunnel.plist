@@ -16,7 +16,7 @@
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key><string>__HOME__</string>
-        <key>INBOX_HOME</key><string>__DATA__</string>
+        <key>OUTERLOOP_HOME</key><string>__DATA__</string>
     </dict>
     <!-- restart on a dropped link (ssh exits nonzero) but stay down after a clean idle
          exit (no relay configured yet) — same as the worker's idle-until-configured. -->

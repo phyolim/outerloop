@@ -2,12 +2,12 @@
 # COLUMN with a CHECK + backfill), and that creation derives type from kind. FAKE.
 import os, sys, atexit, shutil, tempfile, sqlite3
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-taxonomy-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 
-from inbox import taxonomy, db, api
+from outerloop import taxonomy, db, api
 
 # 1. mapping + fallbacks --------------------------------------------------------
 assert taxonomy.type_for("bug") == "coding"
@@ -55,7 +55,7 @@ row = conn.execute("SELECT type, kind FROM ticket WHERE id=?", (r2["id"],)).fetc
 assert (row["type"], row["kind"]) == ("knowledge", "research"), tuple(row)
 
 # 4. the per-kind hint reaches the coding groomer prompt (feature vs bug differ).
-from inbox.tick import run_tick
+from outerloop.tick import run_tick
 bug = api._create_ticket(conn, {"title": "crash on save", "kind": "bug", "repo_path": "/x"})[1]["id"]
 feat = api._create_ticket(conn, {"title": "add export", "kind": "feature", "repo_path": "/x"})[1]["id"]
 for _ in range(8):   # triage -> score -> seed(groom) for both tickets

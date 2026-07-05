@@ -2,22 +2,22 @@
 # against an in-process FAKE db. No HTTP server, no deps.
 import os, sys, atexit, shutil, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-tasks-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 
-from inbox import db, api
+from outerloop import db, api
 
 db.init_db()
 conn = db.connect()
 
-# A coding ticket mid-flight: active/fixing, leased by device "air" at epoch 5, with one
+# A coding ticket mid-flight: active/fixing, leased by worker "air" at epoch 5, with one
 # agent_run recording the session + worktree the app needs to tail/kill.
 with db.immediate(conn):
     conn.execute("INSERT INTO ticket(id,title,type,status,sub_stage,claim_epoch,score)"
                  " VALUES(2,'build a tic tac toe game','coding','active','fixing',5,24.0)")
-    conn.execute("INSERT INTO lease(ticket_id,owner,pid,boot_uuid,expires_at,epoch,device)"
+    conn.execute("INSERT INTO lease(ticket_id,owner,pid,boot_uuid,expires_at,epoch,worker)"
                  " VALUES(2,'air-x',0,'b',datetime('now','+5 minutes'),5,'air')")
     conn.execute("INSERT INTO agent_run(id,ticket_id,role,tick_id,session_id,prompt,"
                  "worktree_path,cost_usd) VALUES('sess-1',2,'fixer','t1','sess-1','p',"
@@ -28,9 +28,9 @@ assert status == 200, status
 tasks = out["tasks"]
 assert len(tasks) == 1, tasks
 t = tasks[0]
-assert t["id"] == 2 and t["running"] is True and t["device"] == "air", t
+assert t["id"] == 2 and t["running"] is True and t["worker"] == "air", t
 assert t["session_id"] == "sess-1" and t["worktree_path"] == "/wt/ticket-2-abc", t
-print("OK /api/tasks: leased ticket shows running device + session + worktree")
+print("OK /api/tasks: leased ticket shows running worker + session + worktree")
 
 status, out = api.handle("POST", "/api/tasks/2/terminate", {}, conn)
 assert status == 200 and out.get("ok"), (status, out)
@@ -43,7 +43,7 @@ print("OK terminate: ticket parked, epoch fenced (5->6), lease dropped")
 # A terminated (parked) ticket still appears in the list, now not running.
 status, out = api.handle("GET", "/api/tasks", {}, conn)
 t = out["tasks"][0]
-assert t["running"] is False and t["device"] is None, t
+assert t["running"] is False and t["worker"] is None, t
 print("OK parked ticket still listed, running=False")
 
 status, out = api.handle("POST", "/api/tasks/999/terminate", {}, conn)

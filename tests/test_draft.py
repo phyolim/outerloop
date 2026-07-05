@@ -1,19 +1,18 @@
 # Drafts: a UI-added ticket is an unsubmitted idea — triage/scoring must NOT touch it
-# until the human starts it (/ui/start or the /start form). FAKE mode, throwaway DB.
+# until the human starts it (/ui/start). FAKE mode, throwaway DB.
 import os, sys, atexit, shutil, tempfile, threading, time, json
 from http.server import ThreadingHTTPServer
 from urllib.request import urlopen, Request
-from urllib.parse import urlencode
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-draft-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 
-from inbox import api, config, db, triage
-from inbox.context import Ctx
-from inbox.web import Handler
+from outerloop import api, config, db, triage
+from outerloop.context import Ctx
+from outerloop.web import Handler
 
 db.init_db()
 c = db.connect()
@@ -35,8 +34,6 @@ def post_json(path, obj):
         return e.code, json.loads(e.read())
 
 
-def post_form(path, **form):
-    urlopen(Request(BASE + path, data=urlencode(form).encode(), method="POST")).read()
 
 
 def row(tid):
@@ -66,14 +63,11 @@ assert row(tid)["status"] == "active", "started draft must triage to active"
 st, r = post_json("/ui/start", {"id": tid})
 assert st == 409, "re-start must be rejected"
 
-# 5. "start now" paths skip the draft stage: /ui/add draft:false and the /add checkbox.
+# 5. The "start now" path skips the draft stage: /ui/add with draft:false.
 st, r = post_json("/ui/add", {"title": "go immediately", "kind": "chore", "draft": False})
 assert r["draft"] is False and row(r["id"])["draft"] == 0
-post_form("/add", title="form start now", kind="feature", start="1")
-post_form("/add", title="form default draft", kind="feature")
-frm = {t["title"]: t for t in c.execute("SELECT * FROM ticket").fetchall()}
-assert frm["form start now"]["draft"] == 0
-assert frm["form default draft"]["draft"] == 1
+st, r = post_json("/ui/add", {"title": "default draft", "kind": "feature"})
+assert r["draft"] is True and row(r["id"])["draft"] == 1
 
 # 6. Producer/API path is unchanged: /api/tickets defaults to NOT draft (screener must
 #    keep flowing), and draft:true is available for callers that want it.

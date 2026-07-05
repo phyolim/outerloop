@@ -5,13 +5,13 @@ import os, sys, atexit, shutil, tempfile, threading, time, json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ.setdefault("INBOX_FAKE", "1")
+os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-notify-")
-os.environ["INBOX_HOME"] = _TMP
+os.environ["OUTERLOOP_HOME"] = _TMP
 atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
 
-from inbox import config, db, gate
-from inbox.context import Ctx
+from outerloop import config, db, gate
+from outerloop.context import Ctx
 
 db.init_db()
 c = db.connect()

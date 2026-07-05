@@ -1,192 +1,396 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { deviceCaps, deviceControl, devicePair, fetchFleet, queryKeys } from '../api'
-import type { Device } from '../types'
+import {
+  fetchFleet,
+  fetchPairRequests,
+  pairConfirm,
+  pairIgnore,
+  queryKeys,
+  workerCaps,
+  workerControl,
+  workerPair,
+} from '../api'
+import type { PairRequest, Worker } from '../types'
 import { agoSec } from '../lib'
-import { BTN, CARD, EmptyState, ErrorBanner, INPUT, PageHeader, Pill, toneForDevice } from './ui'
+import { BTN, EmptyState, ErrorBanner, INPUT, PageHeader, PANEL, STATE_COLOR } from './ui'
 
-function SpendMeter({
-  spend,
+/* Guided capability editing: current tags as chips (✕ removes), remaining known
+   tags as one-click "+ tag" suggestions, and free typing (Enter / comma) to
+   create a brand-new tag. A tag "exists" by being on a worker or a ticket, so
+   creating one needs nothing server-side. */
+function CapsEditor({
+  initial,
+  known,
+  saving,
+  failed,
+  onSave,
+  onCancel,
 }: {
-  spend: { spent: number; cap: number; halted: boolean; window_hours: number }
+  initial: string[]
+  known: string[]
+  saving: boolean
+  failed: boolean
+  onSave: (tags: string[]) => void
+  onCancel: () => void
 }) {
-  const pct = spend.cap ? Math.min(100, Math.round((spend.spent / spend.cap) * 100)) : 0
+  const [tags, setTags] = useState<string[]>(initial)
+  const [text, setText] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const typed = text.trim()
+  const add = (t: string) => {
+    const v = t.trim()
+    if (v && !tags.includes(v)) setTags((s) => [...s, v])
+    setText('')
+  }
+  const opts = known.filter(
+    (k) => !tags.includes(k) && k.toLowerCase().includes(typed.toLowerCase()),
+  )
   return (
-    <div
-      className={`card-enter mb-5 flex flex-wrap items-center gap-x-5 gap-y-2 rounded-xl border px-4 py-3 ${
-        spend.halted ? 'border-red-200 bg-red-50' : 'border-slate-200 bg-white'
-      }`}
-    >
-      <span className="microlabel">tokens · last {spend.window_hours}h</span>
-      <div className="h-1.5 min-w-[10rem] flex-1 overflow-hidden rounded-full bg-slate-200/70">
-        <i
-          className={`block h-full rounded-full transition-[width] duration-500 ${
-            spend.halted ? 'bg-red-500' : pct > 80 ? 'bg-amber-500' : 'bg-emerald-500'
-          }`}
-          style={{ width: `${pct}%` }}
+    <div className="min-w-0 flex-1 py-1">
+      <div
+        className="flex cursor-text flex-wrap items-center gap-1.5 rounded-[7px] border border-white/10 bg-well px-2 py-1.5"
+        onClick={() => inputRef.current?.focus()}
+      >
+        {tags.map((t) => (
+          <span
+            key={t}
+            className="mono flex items-center gap-1 rounded-[5px] bg-white/[0.06] px-[7px] py-0.5 text-[10px] text-tx2"
+          >
+            {t}
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setTags((s) => s.filter((x) => x !== t))
+              }}
+              aria-label={`remove ${t}`}
+              className="text-tx3 transition-colors hover:text-bad"
+            >
+              ✕
+            </button>
+          </span>
+        ))}
+        <input
+          ref={inputRef}
+          value={text}
+          autoFocus
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ',') {
+              e.preventDefault()
+              if (typed) add(text)
+            } else if (e.key === 'Backspace' && !text) {
+              setTags((s) => s.slice(0, -1))
+            } else if (e.key === 'Escape') {
+              onCancel()
+            }
+          }}
+          placeholder={tags.length ? '' : 'type a tag…'}
+          className="mono min-w-[80px] flex-1 bg-transparent text-xs text-tx outline-none placeholder:text-tx3"
+          aria-label="capability tags"
         />
       </div>
-      <span className="mono text-sm tabular-nums text-slate-700">
-        <b className="font-semibold">{spend.spent.toLocaleString()}</b>
-        <span className="text-slate-400"> / {spend.cap.toLocaleString()}</span>
-      </span>
-      {spend.halted ? <Pill tone="red">halted — over budget</Pill> : null}
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        {opts.map((k) => (
+          <button
+            key={k}
+            onClick={() => add(k)}
+            className="mono rounded-[5px] border border-dashed border-white/[0.14] px-[7px] py-0.5 text-[10px] text-tx3 transition-colors hover:border-acc/40 hover:text-acc"
+          >
+            + {k}
+          </button>
+        ))}
+        {typed && !tags.includes(typed) && !known.includes(typed) ? (
+          <button
+            onClick={() => add(text)}
+            className="mono rounded-[5px] border border-dashed border-acc/40 px-[7px] py-0.5 text-[10px] text-acc"
+          >
+            + create “{typed}”
+          </button>
+        ) : null}
+        <span className="ml-auto flex items-center gap-1.5">
+          {failed ? <span className="text-[11px] text-bad">Failed.</span> : null}
+          <button
+            onClick={() => onSave(tags)}
+            disabled={saving}
+            className="rounded-md bg-acc px-2.5 py-1 text-[11px] font-semibold text-ink transition-colors hover:bg-[#5ee79a] disabled:opacity-40"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            onClick={onCancel}
+            className="rounded-md border border-white/[0.12] px-2.5 py-1 text-[11px] text-tx2 transition-colors hover:text-tx"
+          >
+            Cancel
+          </button>
+        </span>
+      </div>
     </div>
   )
 }
 
-function DeviceCard({ d, i }: { d: Device; i: number }) {
+function WorkerRow({ d, known }: { d: Worker; known: string[] }) {
   const qc = useQueryClient()
-  const [caps, setCaps] = useState(d.capabilities.join(', '))
+  const [editing, setEditing] = useState(false)
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.fleet() })
-  const ctl = useMutation({ mutationFn: deviceControl, onSuccess: invalidate })
-  const save = useMutation({ mutationFn: deviceCaps, onSuccess: invalidate })
+  const ctl = useMutation({ mutationFn: workerControl, onSuccess: invalidate })
+  const save = useMutation({
+    mutationFn: workerCaps,
+    onSuccess: () => {
+      setEditing(false)
+      invalidate()
+    },
+  })
   const off = d.state === 'offline'
 
   return (
     <div
-      className={`card-enter ${CARD} p-4 ${off ? 'border-dashed bg-slate-50/60' : ''}`}
-      style={{ animationDelay: `${Math.min(i, 8) * 45}ms` }}
+      className="flex items-center gap-4 border-t border-hairline2 px-4 py-3 first:border-0"
+      style={{ opacity: off ? 0.55 : 1 }}
     >
-      <div className="mb-2.5 flex items-center justify-between gap-2">
-        <span className="mono text-[15px] font-semibold text-slate-900">{d.name}</span>
-        <Pill tone={toneForDevice(d.state)} dot pulse={d.state === 'online'}>
-          {d.state}
-        </Pill>
-      </div>
-
-      <div className="mb-2.5 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500">
-        <span>
-          seen <b className="mono font-semibold text-slate-700">{agoSec(d.seen_sec)}</b>
-        </span>
-        {d.current_ticket ? (
-          <span>
-            running{' '}
-            <a
-              href={`#/ticket/${d.current_ticket}`}
-              className="mono font-semibold text-sky-700 hover:underline"
-            >
-              #{d.current_ticket}
-            </a>
-          </span>
-        ) : null}
-        {d.version ? <span className="mono text-slate-400">v{d.version}</span> : null}
-      </div>
-
-      <div className="mb-2 flex flex-wrap gap-1">
-        {d.capabilities.length ? (
-          d.capabilities.map((c) => (
-            <span
-              key={c}
-              className="mono rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600"
-            >
-              {c}
-            </span>
-          ))
-        ) : (
-          <span className="text-[11px] italic text-slate-400">no capabilities</span>
-        )}
-      </div>
-
-      <form
-        className="mb-3 flex gap-1.5"
-        onSubmit={(e) => {
-          e.preventDefault()
-          save.mutate({ device: d.name, capabilities: caps })
-        }}
+      <span className="mono w-[70px] shrink-0 truncate text-[13px] font-semibold text-tx" title={d.version ? `v${d.version}` : undefined}>
+        {d.name}
+      </span>
+      <span
+        className="mono w-[82px] shrink-0 text-[11px] font-semibold"
+        style={{ color: STATE_COLOR[d.state] ?? '#5d6470' }}
       >
-        <input
-          value={caps}
-          onChange={(e) => setCaps(e.target.value)}
-          placeholder="dev, repos:*, heavy"
-          className={`${INPUT} mono min-w-0 flex-1 px-2 py-1 text-xs`}
+        ● {d.state}
+      </span>
+      <span className="mono w-[76px] shrink-0 text-[11px] text-tx3">{agoSec(d.seen_sec)}</span>
+      <span className="mono w-24 shrink-0 text-[11px]">
+        {d.current_ticket ? (
+          <a href={`/ticket/${d.current_ticket}`} className="text-info hover:text-[#8ecbfa]">
+            ▸ #{d.current_ticket}
+          </a>
+        ) : null}
+      </span>
+      {editing ? (
+        <CapsEditor
+          initial={d.capabilities}
+          known={known}
+          saving={save.isPending}
+          failed={save.isError}
+          onSave={(tags) => save.mutate({ worker: d.name, capabilities: tags.join(', ') })}
+          onCancel={() => setEditing(false)}
         />
-        <button disabled={save.isPending} className={`${BTN.subtle} px-2.5 py-1 text-xs`}>
-          Save
+      ) : (
+        <button
+          onClick={() => setEditing(true)}
+          title="Edit capabilities"
+          className="flex min-w-0 flex-1 flex-wrap gap-1.5 text-left"
+        >
+          {d.capabilities.length ? (
+            d.capabilities.map((c) => (
+              <span key={c} className="mono rounded-[5px] bg-white/[0.06] px-[7px] py-0.5 text-[10px] text-tx2">
+                {c}
+              </span>
+            ))
+          ) : (
+            <span className="text-[11px] italic text-tx3">no capabilities</span>
+          )}
         </button>
-      </form>
-
-      <div className="flex gap-1.5">
+      )}
+      <span className="flex shrink-0 gap-1.5">
         {d.state === 'paused' || d.state === 'draining' ? (
           <button
-            onClick={() => ctl.mutate({ device: d.name, action: 'resume' })}
+            onClick={() => ctl.mutate({ worker: d.name, action: 'resume' })}
             disabled={ctl.isPending}
-            className={`${BTN.go} px-3 py-1 text-xs`}
+            className="rounded-md border border-acc/40 px-2.5 py-1 text-[11px] text-acc transition-colors hover:bg-acc/10 disabled:opacity-40"
           >
             Resume
           </button>
         ) : (
           <>
             <button
-              onClick={() => ctl.mutate({ device: d.name, action: 'pause' })}
+              onClick={() => ctl.mutate({ worker: d.name, action: 'pause' })}
               disabled={ctl.isPending}
-              className={`${BTN.subtle} px-3 py-1 text-xs`}
+              className="rounded-md border border-white/[0.12] px-2.5 py-1 text-[11px] text-tx2 transition-colors hover:text-tx disabled:opacity-40"
             >
               Pause
             </button>
             <button
-              onClick={() => ctl.mutate({ device: d.name, action: 'drain' })}
+              onClick={() => ctl.mutate({ worker: d.name, action: 'drain' })}
               disabled={ctl.isPending}
-              className={`${BTN.subtle} px-3 py-1 text-xs text-amber-700 ring-amber-300 hover:bg-amber-50`}
+              title="Finish the current ticket, then stop claiming"
+              className="rounded-md border border-warn/30 px-2.5 py-1 text-[11px] text-warn transition-colors hover:bg-warn/[0.08] disabled:opacity-40"
             >
               Drain
             </button>
           </>
         )}
-      </div>
+      </span>
     </div>
   )
 }
 
+const CODE_LEN = 6
+
+/* One amber banner per pending LAN pairing request: type the 6-char code the
+   worker is displaying, Pair mints the token, Ignore drops the request. The
+   code cells are one invisible input rendered as boxes — focus lives in the
+   real input so paste/backspace just work. */
+function PairingBanner({ r, seed }: { r: PairRequest; seed: string[] }) {
+  const qc = useQueryClient()
+  const [code, setCode] = useState('')
+  const [left, setLeft] = useState(r.expires_in)
+  const inputRef = useRef<HTMLInputElement>(null)
+  useEffect(() => setLeft(r.expires_in), [r.expires_in])
+  useEffect(() => {
+    const t = setInterval(() => setLeft((s) => Math.max(0, s - 1)), 1000)
+    return () => clearInterval(t)
+  }, [])
+
+  const confirm = useMutation({
+    mutationFn: () => pairConfirm({ request_id: r.request_id, code }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.pair() })
+      qc.invalidateQueries({ queryKey: queryKeys.fleet() })
+    },
+    onError: () => setCode(''),
+  })
+  const drop = useMutation({
+    mutationFn: () => pairIgnore(r.request_id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.pair() }),
+  })
+
+  const chars = code.padEnd(CODE_LEN).split('')
+  return (
+    <div className="card-enter mb-3 rounded-[10px] border border-warn/30 bg-warn/5 px-4 py-[15px]">
+      <div className="mb-1 flex items-center gap-2">
+        <span className="mono text-[11px] font-semibold uppercase tracking-[0.1em] text-warn">
+          ◈ pairing request
+        </span>
+        <span className="mono ml-auto text-[10px] text-tx3">{r.ip}</span>
+      </div>
+      <p className="mb-3 text-[13px] text-[#c6ccd8]">
+        <span className="mono font-semibold text-tx">{r.name}</span>{' '}
+        {r.host_info ? <span className="mono text-[11px] text-tx3">· {r.host_info} </span> : null}
+        wants to join this fleet. Type the code shown on that machine.
+      </p>
+      <div className="flex flex-wrap items-center gap-2.5">
+        <div
+          className="relative flex cursor-text gap-[5px]"
+          onClick={() => inputRef.current?.focus()}
+        >
+          <input
+            ref={inputRef}
+            value={code}
+            autoFocus
+            onChange={(e) =>
+              setCode(
+                e.target.value
+                  .toUpperCase()
+                  .replace(/[^0-9A-Z]/g, '')
+                  .slice(0, CODE_LEN),
+              )
+            }
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && code.length === CODE_LEN) confirm.mutate()
+            }}
+            className="absolute inset-0 opacity-0"
+            aria-label="pairing code"
+          />
+          {chars.map((ch, i) => (
+            <span
+              key={i}
+              className="mono flex h-9 w-[29px] items-center justify-center rounded-[7px] bg-well text-[17px] font-bold text-tx"
+              style={{
+                border: `1px solid ${
+                  i === Math.min(code.length, CODE_LEN - 1) && code.length < CODE_LEN
+                    ? 'rgba(61,220,132,0.5)'
+                    : 'rgba(255,255,255,0.14)'
+                }`,
+              }}
+            >
+              {ch.trim()}
+            </span>
+          ))}
+        </div>
+        <button
+          onClick={() => confirm.mutate()}
+          disabled={confirm.isPending || code.length < CODE_LEN || left === 0}
+          className="rounded-[7px] bg-acc px-[15px] py-[7px] text-xs font-semibold text-ink transition-colors hover:bg-[#5ee79a] disabled:opacity-40"
+        >
+          Pair {r.name}
+        </button>
+        <button
+          onClick={() => drop.mutate()}
+          disabled={drop.isPending}
+          className="rounded-[7px] border border-white/[0.12] px-3 py-[7px] text-xs text-tx2 transition-colors hover:text-tx disabled:opacity-40"
+        >
+          Ignore
+        </button>
+        <span className="mono ml-auto text-[11px] text-warn">
+          {left > 0 ? `expires ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}` : 'expired'}
+        </span>
+      </div>
+      {confirm.isError ? (
+        <p className="mono mt-2 text-[11px] text-bad">{(confirm.error as Error).message}</p>
+      ) : null}
+      <p className="mono mt-[11px] text-[11px] text-tx3">
+        seeds caps {seed.join(' · ')} — edit live here after pairing
+      </p>
+    </div>
+  )
+}
+
+/* Manual name+token pairing — the footnote flow (remote workers not on this LAN). */
 function PairPanel() {
   const [name, setName] = useState('')
   const qc = useQueryClient()
   const pair = useMutation({
-    mutationFn: devicePair,
+    mutationFn: workerPair,
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.fleet() }),
   })
 
   return (
-    <div className="card-enter mt-6 rounded-xl border border-dashed border-slate-300 bg-white/60 p-4">
-      <p className="microlabel mb-2">pair a new device</p>
-      <form
-        className="flex flex-wrap gap-2"
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (name.trim()) pair.mutate(name.trim())
-        }}
-      >
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="device name (e.g. mbp)"
-          className={`${INPUT} mono`}
-        />
-        <button disabled={pair.isPending || !name.trim()} className={BTN.primary}>
-          Generate token
-        </button>
-      </form>
-      {pair.data ? (
-        <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-          <p className="text-sm text-slate-700">
-            On <b className="mono">{pair.data.device}</b>, open the menu-bar <b>Settings…</b>,
-            set <b>Device</b> to <code className="mono">{pair.data.device}</code>, and paste
-            this token:
-          </p>
-          <pre className="mono mt-2 overflow-auto rounded-md bg-white p-2 text-xs text-slate-800 ring-1 ring-emerald-200">
-            {pair.data.token}
-          </pre>
-          <p className="mt-1.5 text-xs text-slate-500">
-            Shown once — the hub stores only a hash. Re-pair to issue a new token.
-          </p>
-        </div>
-      ) : null}
-      <p className="mt-2 text-xs text-slate-400">
-        Capabilities gate which tickets a device claims (e.g. <code className="mono">dev</code>,{' '}
-        <code className="mono">repos:*</code>). Pause stops claiming; Drain finishes the current
-        ticket first.
-      </p>
-    </div>
+    <details className="mt-3">
+      <summary className="cursor-pointer text-[11px] text-tx3 transition-colors hover:text-tx2">
+        Remote worker not on this network? <span className="text-info">Pair manually with a token →</span>
+      </summary>
+      <div className="card-enter mt-3 rounded-[10px] border border-dashed border-white/10 p-4">
+        <p className="microlabel mb-2">pair a new worker</p>
+        <form
+          className="flex flex-wrap gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (name.trim()) pair.mutate(name.trim())
+          }}
+        >
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="worker name (e.g. mbp)"
+            className={`${INPUT} mono`}
+          />
+          <button disabled={pair.isPending || !name.trim()} className={BTN.primary}>
+            Generate token
+          </button>
+        </form>
+        {pair.data ? (
+          <div className="mt-3 rounded-lg border border-acc/30 bg-acc/5 p-3">
+            <p className="text-[13px] text-[#c6ccd8]">
+              On <b className="mono">{pair.data.worker}</b>, run{' '}
+              <code className="mono">outerloop local worker {pair.data.worker}</code> and{' '}
+              <code className="mono">outerloop local token &lt;token&gt;</code> — or open the
+              menu-bar <b>Settings…</b>, set <b>Worker</b> to{' '}
+              <code className="mono">{pair.data.worker}</code>, and paste this token:
+            </p>
+            <pre className="mono mt-2 overflow-auto rounded-md bg-well p-2 text-xs text-tx ring-1 ring-acc/30">
+              {pair.data.token}
+            </pre>
+            <p className="mt-1.5 text-xs text-tx3">
+              Shown once — the hub stores only a hash. Re-pair to issue a new token.
+            </p>
+          </div>
+        ) : null}
+        <p className="mt-2 text-xs text-tx3">
+          Capabilities gate which tickets a worker claims (e.g. <code className="mono">dev</code>,{' '}
+          <code className="mono">repos:*</code>). Pause stops claiming; Drain finishes the current
+          ticket first.
+        </p>
+      </div>
+    </details>
   )
 }
 
@@ -194,8 +398,15 @@ export default function FleetPage() {
   const { data, isError } = useQuery({
     queryKey: queryKeys.fleet(),
     queryFn: fetchFleet,
+  })
+  // Pairing requests live in hub memory, not the DB, so the SSE stream never
+  // announces them — this one query polls while the page is open.
+  const { data: pair } = useQuery({
+    queryKey: queryKeys.pair(),
+    queryFn: fetchPairRequests,
     refetchInterval: 3000,
   })
+  const pairRequests = pair?.requests ?? []
 
   return (
     <div>
@@ -204,20 +415,31 @@ export default function FleetPage() {
         subtitle="Worker machines connected to this hub — capacity, budget, and controls."
       />
       {isError ? <ErrorBanner /> : null}
-      {data ? <SpendMeter spend={data.spend} /> : null}
-      {data && data.devices.length === 0 ? (
+      {data?.spend.halted ? (
+        <div className="mb-4 flex items-center gap-2 rounded-[10px] border border-bad/30 bg-bad/5 px-3 py-2 text-[13px] text-bad">
+          <i className="h-2 w-2 rounded-full bg-bad" />
+          Fleet halted — token budget exhausted for this window.
+        </div>
+      ) : null}
+      {data && data.workers.length === 0 ? (
         <EmptyState
           glyph="⧉"
-          title="No devices yet"
+          title="No workers yet"
           hint="Start a worker pointed at this hub, or pair one below."
         />
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {(data?.devices ?? []).map((d, i) => (
-            <DeviceCard key={d.name} d={d} i={i} />
+        <div className={`card-enter ${PANEL} mb-5`}>
+          {(data?.workers ?? []).map((d) => (
+            <WorkerRow key={d.name} d={d} known={data?.known_caps ?? []} />
           ))}
         </div>
       )}
+      {pairRequests.map((r) => (
+        <PairingBanner key={r.request_id} r={r} seed={pair?.seed_caps ?? []} />
+      ))}
+      <p className="text-[11px] text-tx3">
+        New Macs on this LAN appear here automatically when they ask to join.
+      </p>
       <PairPanel />
     </div>
   )
