@@ -12,7 +12,7 @@ import tarfile
 import time
 import uuid
 
-from . import __version__, client, config
+from . import __version__, client, config, git_ops, warmup
 from .context import RemoteCtx, StaleEpoch
 from .handlers import get_handler
 
@@ -78,6 +78,21 @@ def _maybe_self_update(base, token, hub_version, worker):
         return False
 
 
+def _reap_local(base, token, worker):
+    """Retire this box's worktrees whose ticket the hub says is no longer resumable —
+    the remote half of git_ops.reap_worktrees (a worker's disk is invisible to the
+    hub). The hub applies the same unresumable() predicate its own reaper uses.
+    Best-effort: any failure just leaves the sweep for the next interval."""
+    dirs = git_ops.local_ticket_dirs()
+    if not dirs:
+        return
+    resp = client.post(base, "/api/reap_check", {"ticket_ids": sorted(dirs)}, token=token)
+    for tid in resp.get("reap") or []:
+        for d in dirs.get(tid) or []:
+            git_ops.retire_worktree(config, d)  # branch derived from the tree's HEAD
+            print(f"[{worker}] retired worktree {d.name} (ticket {tid} no longer resumable)")
+
+
 def run_worker(base=None, self_update=True):
     # Config resolves from env first (baked launchd plist), else machine-local
     # settings.json (`outerloop local <key> …` / the menu-bar app). One store either way.
@@ -96,6 +111,7 @@ def run_worker(base=None, self_update=True):
         return
     token = os.environ.get("OUTERLOOP_WORKER_TOKEN") or config.local_setting("token")
     poll = config.WORKER_POLL_SEC
+    last_reap = 0.0
     print(f"worker '{worker}' caps={caps} -> {base} (FAKE={config.FAKE})")
     while True:
         try:
@@ -110,6 +126,15 @@ def run_worker(base=None, self_update=True):
                 # launchd plist KeepAlive={SuccessfulExit:false}: exit 0 would leave us
                 # STOPPED; non-zero makes launchd restart us on the freshly-extracted code.
                 raise SystemExit(1)
+            # After apply_hub_cfg (FAKE is now the fleet's truth): first real-mode
+            # start front-loads the macOS permission dialogs a ticket would trigger.
+            warmup.maybe_warmup()
+            if time.monotonic() - last_reap >= config.WORKER_REAP_SEC:
+                last_reap = time.monotonic()
+                try:
+                    _reap_local(base, token, worker)
+                except Exception as e:  # noqa: BLE001 — janitorial; never skip real work
+                    print(f"[{worker}] worktree sweep failed ({e}); next interval")
             if hb.get("status") not in (None, "online"):   # paused/draining => idle
                 time.sleep(poll)
                 continue

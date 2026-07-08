@@ -67,6 +67,8 @@ MAX_REVIEW_ROUNDS = 3       # reviewing<->fixing hard cap, then escalate
 MAX_CLARIFICATIONS = 3      # author may ask the human this many questions before proceeding
 MAX_ATTEMPTS = 12           # per-ticket global stage-entry ceiling -> failed
 MAX_CONSEC_TIMEOUTS = 2     # consecutive agent timeouts on a ticket -> failed
+MAX_PR_CREATE_ATTEMPTS = 3  # shipper runs before a failing PR-create gives up (deterministic errs)
+MAX_REVIEW_DIFF_CHARS = 100_000  # diffs larger than this gate to a human, never auto-review
 MAX_TICKETS_PER_TICK = 3
 # Budgets are in TOKENS (input + cache_creation + output; cache READS excluded — they
 # are near-free and would swamp the signal). USD is legacy: on a subscription every
@@ -79,12 +81,13 @@ TICKET_BUDGET_TOKENS = 1_000_000 # cumulative per-ticket ceiling -> failed
 AGENT_TIMEOUT_SEC = 900     # subprocess wall-clock wall for a headless claude run
 # Cheap classify/estimate roles run inline on the hub scheduler thread — a hung call
 # must not stall decision resumes for the full 15-minute wall.
-AGENT_TIMEOUT_BY_ROLE = {"triage": 60, "scorer": 60, "shipper": 300}
+AGENT_TIMEOUT_BY_ROLE = {"triage": 60, "scorer": 60, "shipper": 300, "warmup": 180}
 
 # Fleet (hub-and-spoke) timings.
 WORKER_OFFLINE_SEC = 120    # fleet view marks a worker offline after this heartbeat gap
 SCHED_INTERVAL_SEC = 3      # hub scheduler cadence (DB-only top-half)
 WORKER_POLL_SEC = 2         # worker poll interval when idle
+WORKER_REAP_SEC = 600       # how often a remote worker sweeps its worktrees via /api/reap_check
 FLEET_BUDGET_TOKENS = 5_000_000  # hub-wide token ceiling across ALL workers in the window
 FLEET_SPEND_WINDOW_HOURS = 24
 PIN_OFFLINE_PARK_HOURS = 24 # park an active ticket pinned to a worker unseen this long
@@ -147,7 +150,9 @@ ROLE_MODEL_DEFAULTS = {
     "knowledge": "sonnet",  # research/write a deliverable
     "ops": "sonnet",        # draft an external action
     "author": "opus",       # write the code — the deep-work role
-    "fixer": "opus",        # address review findings in code
+    "fixer": "sonnet",      # address enumerated findings in an existing worktree — scoped
+                            # work sonnet handles; override OUTERLOOP_MODELS=fixer=opus to revert
+    "warmup": "haiku",      # one-time permission warm-up — echo + write a file
 }
 DEFAULT_MODEL_TIER = "sonnet"
 

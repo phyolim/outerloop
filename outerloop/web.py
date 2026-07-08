@@ -765,7 +765,8 @@ class Handler(BaseHTTPRequestHandler):
         # Board view must not hide it (it is also the top of the Inbox).
         counts["open"] = counts["backlog"] + counts["active"] + counts["blocked"] + counts["failed"]
         counts["all"] = counts["open"] + counts["onhold"] + counts["done"]
-        return {"tickets": tickets, "counts": counts, "projects": self._projects(conn)}
+        return {"tickets": tickets, "counts": counts, "projects": self._projects(conn),
+                "repos": self._repos(conn)}
 
     def _ticket_json(self, conn, tid):
         # A ticket's thread: its description plus a Jira-style back-and-forth built from the
@@ -955,6 +956,14 @@ class Handler(BaseHTTPRequestHandler):
         return [r["project"] for r in conn.execute(
             "SELECT DISTINCT project FROM ticket WHERE project IS NOT NULL AND project!=''"
             " ORDER BY project")]
+
+    def _repos(self, conn):
+        # Stored repo_path is already canonical (normalize_repo_path at intake), so
+        # suggesting past values re-converges every spelling onto one clone per worker.
+        # Recency order, not alpha — the create form wants "what I used lately".
+        return [r["repo_path"] for r in conn.execute(
+            "SELECT repo_path FROM ticket WHERE repo_path IS NOT NULL AND repo_path!=''"
+            " GROUP BY repo_path ORDER BY MAX(id) DESC LIMIT 20")]
 
     # -- staffing (Projects + Agents pages) ------------------------------------
     def _agents_json(self, conn):

@@ -92,6 +92,10 @@ enum C {
 func monoFont(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
     NSFont.monospacedSystemFont(ofSize: size, weight: weight)
 }
+// Stamped into Info.plist by build-app.sh from outerloop/__init__.py ("?" on
+// unbundled dev runs where Bundle.main has no plist).
+let APP_VERSION = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "?"
+
 func label(_ s: String, _ font: NSFont, _ color: NSColor) -> NSTextField {
     let t = NSTextField(labelWithString: s)
     t.font = font; t.textColor = color; t.lineBreakMode = .byTruncatingTail
@@ -256,6 +260,56 @@ func run(_ launchPath: String, _ args: [String]) -> (code: Int32, out: String) {
     return (p.terminationStatus, String(data: data, encoding: .utf8) ?? "")
 }
 
+// --- self-update -------------------------------------------------------------
+// brew can't swap the bundle from a terminal without the App Management TCC
+// grant, but an app replacing an app signed by the SAME team is never gated
+// (the Sparkle model) — so the app updates itself and the cask is auto_updates.
+let GH_LATEST = "https://api.github.com/repos/phyolim/outerloop/releases/latest"
+let TEAM_ID = "QGB9U9HXX3"
+
+func semverNewer(_ a: String, _ b: String) -> Bool {   // a > b, numeric per part
+    let x = a.split(separator: ".").map { Int($0) ?? 0 }
+    let y = b.split(separator: ".").map { Int($0) ?? 0 }
+    for i in 0..<max(x.count, y.count) {
+        let (p, q) = (i < x.count ? x[i] : 0, i < y.count ? y[i] : 0)
+        if p != q { return p > q }
+    }
+    return false
+}
+
+// Download → verify (strict codesign + our TeamIdentifier) → swap own bundle →
+// relaunch. Runs off-main; returns an error line, or never (terminates on success).
+func selfUpdate(to ver: String) -> String? {
+    let fm = FileManager.default
+    let stage = NSTemporaryDirectory() + "outerloop-update-\(ver)"
+    try? fm.removeItem(atPath: stage)
+    try? fm.createDirectory(atPath: stage, withIntermediateDirectories: true)
+    guard let u = URL(string: "https://github.com/phyolim/outerloop/releases/download/v\(ver)/Outerloop-\(ver).zip"),
+          let data = try? Data(contentsOf: u) else { return "download failed" }
+    let zip = stage + "/Outerloop.zip"
+    guard (try? data.write(to: URL(fileURLWithPath: zip))) != nil,
+          run("/usr/bin/ditto", ["-xk", zip, stage]).code == 0 else { return "unzip failed" }
+    let newApp = stage + "/Outerloop.app"
+    // Never install a bundle that isn't intact and ours — a corrupt or MITM'd
+    // download must fail here, not become the running app.
+    guard run("/usr/bin/codesign", ["--verify", "--strict", newApp]).code == 0,
+          run("/usr/bin/codesign", ["-dv", newApp]).out.contains("TeamIdentifier=\(TEAM_ID)")
+        else { return "signature check failed" }
+    let live = Bundle.main.bundlePath
+    let old = stage + "/replaced.app"
+    do { try fm.moveItem(atPath: live, toPath: old) } catch { return "cannot move current app aside" }
+    do { try fm.moveItem(atPath: newApp, toPath: live) } catch {
+        try? fm.moveItem(atPath: old, toPath: live)     // roll back, keep running build
+        return "cannot install new app"
+    }
+    let sh = Process()
+    sh.executableURL = URL(fileURLWithPath: "/bin/sh")
+    sh.arguments = ["-c", "sleep 1; /usr/bin/open \"\(live)\""]
+    try? sh.run()
+    DispatchQueue.main.async { NSApp.terminate(nil) }
+    return nil
+}
+
 func isRunning(_ label: String) -> Bool {
     let r = run("/bin/launchctl", ["print", "gui/\(uid)/\(label)"])
     return r.code == 0 && r.out.contains("state = running")
@@ -337,15 +391,26 @@ func setWorkerEnv(_ updates: [String: String]) -> Bool {
     return (try? out.write(to: URL(fileURLWithPath: workerPlist))) != nil
 }
 
+// Blank the worker token wherever it lives (the inverse of the pairing writes),
+// so isUnpairedWorker flips true and the popover offers pairing again.
+func clearWorkerToken() {
+    if workerEnv()["OUTERLOOP_WORKER_TOKEN"] != nil { _ = setWorkerEnv(["OUTERLOOP_WORKER_TOKEN": ""]) }
+    writeSettings(["token": ""])
+}
+
 // --- hub JSON API (bearer = this machine's worker token) --------------------
-func apiGET(_ path: String, _ done: @escaping ([String: Any]?) -> Void) {
-    guard let url = URL(string: hubBase() + path) else { done(nil); return }
+func apiGET(_ path: String, status statusDone: @escaping ([String: Any]?, Int) -> Void) {
+    guard let url = URL(string: hubBase() + path) else { statusDone(nil, 0); return }
     var req = URLRequest(url: url); req.timeoutInterval = 5
     let tok = myToken(); if !tok.isEmpty { req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization") }
-    URLSession.shared.dataTask(with: req) { data, _, _ in
+    URLSession.shared.dataTask(with: req) { data, resp, _ in
         let j = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any]
-        DispatchQueue.main.async { done(j) }
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        DispatchQueue.main.async { statusDone(j, code) }
     }.resume()
+}
+func apiGET(_ path: String, _ done: @escaping ([String: Any]?) -> Void) {
+    apiGET(path, status: { j, _ in done(j) })
 }
 func apiPOST(_ path: String, body: [String: Any] = [:], _ done: @escaping (Bool) -> Void) {
     guard let url = URL(string: hubBase() + path) else { done(false); return }
@@ -1085,6 +1150,11 @@ final class PopoverPane: NSViewController {
         var isDone: Bool { if case .done = self { return true }; return false }
     }
     var pairPhase: PairPhase = .idle
+    var pairNote: String?   // why we're (re-)pairing, e.g. token revoked by the hub
+    var updateVersion: String?          // newer notarized build on GitHub
+    var updating = false
+    var updateError: String?
+    static var lastUpdateCheck = Date.distantPast
     let discovery = HubDiscovery()
     var pairPoll: Timer?
     var pairTick: Timer?
@@ -1119,6 +1189,40 @@ final class PopoverPane: NSViewController {
         }
         render(fleet: nil, decisions: nil)   // instant skeleton, then live data
         refresh()
+        checkForUpdate()
+    }
+
+    // Poll GitHub for a newer notarized build, at most every 6h. The result just
+    // arms the "Update" button in the version footer — installing is a click.
+    func checkForUpdate() {
+        guard APP_VERSION != "?",   // unbundled dev run
+              Date().timeIntervalSince(Self.lastUpdateCheck) > 6 * 3600 else { return }
+        Self.lastUpdateCheck = Date()
+        guard let url = URL(string: GH_LATEST) else { return }
+        var req = URLRequest(url: url); req.timeoutInterval = 10
+        URLSession.shared.dataTask(with: req) { data, _, _ in
+            guard let j = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any],
+                  let tag = j["tag_name"] as? String else { return }
+            let ver = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+            let hasZip = ((j["assets"] as? [[String: Any]]) ?? [])
+                .contains { ($0["name"] as? String) == "Outerloop-\(ver).zip" }
+            guard hasZip, semverNewer(ver, APP_VERSION) else { return }
+            DispatchQueue.main.async { self.updateVersion = ver }   // shown on next render
+        }.resume()
+    }
+
+    @objc func installUpdate() {
+        guard let uv = updateVersion, !updating else { return }
+        updating = true; updateError = nil
+        refresh()
+        DispatchQueue.global().async {
+            let err = selfUpdate(to: uv)    // on success the app relaunches; no return
+            DispatchQueue.main.async {
+                self.updating = false
+                self.updateError = err
+                self.refresh()
+            }
+        }
     }
     override func viewDidDisappear() {
         super.viewDidDisappear()
@@ -1130,11 +1234,26 @@ final class PopoverPane: NSViewController {
     }
 
     func refresh() {
-        apiGET("/api/fleet") { fleet in
+        apiGET("/api/fleet", status: { fleet, code in
+            // A 401 while we hold a token means the hub deleted this worker:
+            // drop the dead token and fall into the existing pairing flow.
+            if code == 401, role == "worker", !myToken().isEmpty {
+                self.tokenRevoked()
+                return
+            }
             apiGET("/api/decisions") { decisions in
                 self.render(fleet: fleet, decisions: decisions)
             }
-        }
+        })
+    }
+
+    func tokenRevoked() {
+        clearWorkerToken()
+        pairNote = "hub no longer recognizes this worker — pair again"
+        pairPhase = .idle
+        discovery.onChange = { [weak self] in self?.renderPairing() }
+        discovery.start()
+        renderPairing()
     }
 
     func render(fleet: [String: Any]?, decisions: [String: Any]?) {
@@ -1306,7 +1425,28 @@ final class PopoverPane: NSViewController {
                                     : "Kill switch: stop the whole fleet from claiming new work"
         kill.target = self; kill.action = #selector(toggleKillSwitch)
         kill.frame = NSRect(x: W - inset - 38, y: y, width: 38, height: 26); view.addSubview(kill)
-        y += 40
+        y += 34
+
+        // version footer: this app's build (hub version lives in the dashboard header),
+        // plus the self-update affordance when GitHub has a newer notarized build.
+        let verL = label("v\(APP_VERSION)", monoFont(10), C.tx3)
+        verL.frame = NSRect(x: inset, y: y + 3, width: 120, height: 13)
+        view.addSubview(verL)
+        if updating {
+            let u = label("updating…", monoFont(10), C.tx3)
+            u.alignment = .right
+            u.frame = NSRect(x: W - inset - 140, y: y + 3, width: 140, height: 13); view.addSubview(u)
+        } else if let e = updateError {
+            let u = label("update failed: \(e)", monoFont(10), C.bad)
+            u.alignment = .right; u.lineBreakMode = .byTruncatingTail
+            u.frame = NSRect(x: W - inset - 220, y: y + 3, width: 220, height: 13); view.addSubview(u)
+        } else if let uv = updateVersion {
+            let b = flatButton("Update to v\(uv)", fill: C.acc.withAlphaComponent(0.14), text: C.acc,
+                               border: nil, font: .systemFont(ofSize: 11, weight: .semibold))
+            b.target = self; b.action = #selector(installUpdate)
+            b.frame = NSRect(x: W - inset - 110, y: y, width: 110, height: 20); view.addSubview(b)
+        }
+        y += 24
 
         view.setFrameSize(NSSize(width: W, height: y))
         preferredContentSize = NSSize(width: W, height: y)
@@ -1386,6 +1526,11 @@ final class PopoverPane: NSViewController {
             let h = microlabel("pair this mac", C.warn)
             h.frame = NSRect(x: inset, y: y, width: 200, height: 14); view.addSubview(h)
             y += 21
+            if let n = pairNote {
+                let w = label(n, monoFont(11), C.warn)
+                w.frame = NSRect(x: inset, y: y, width: W - 2 * inset, height: 14); view.addSubview(w)
+                y += 20
+            }
             if discovery.hubs.isEmpty {
                 let s = label("searching for hubs on this network…", monoFont(11), C.tx3)
                 s.frame = NSRect(x: inset, y: y, width: W - 2 * inset, height: 14); view.addSubview(s)
@@ -1703,6 +1848,11 @@ final class Controller: NSObject, NSWindowDelegate {
         block.addSubview(statusBlock)
         side.addSubview(block)
 
+        // app version, tucked above the status block
+        let verL = label("v\(APP_VERSION)", monoFont(10), C.tx3)
+        verL.frame = NSRect(x: 18, y: 72, width: 144, height: 13)
+        side.addSubview(verL)
+
         for p in panes {
             p.setFrameOrigin(NSPoint(x: 180, y: 0))
             p.isHidden = true
@@ -1881,6 +2031,11 @@ func firstRunRolePicker() {
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // menu-bar only, no Dock icon
 installMainMenu()
+// Default open-at-login on first launch only; a later manual un-check sticks.
+if #available(macOS 13, *), !UserDefaults.standard.bool(forKey: "didDefaultLoginItem") {
+    if SMAppService.mainApp.status == .notRegistered { setLoginItem(true) }
+    UserDefaults.standard.set(true, forKey: "didDefaultLoginItem")
+}
 firstRunRolePicker()                   // choose hub/worker before the window builds
 let controller = Controller()
 app.run()

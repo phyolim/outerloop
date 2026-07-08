@@ -220,9 +220,6 @@ Cheap models do the trivial work, capable models do the deep work. Defaults live
 | groomer, reviewer, knowledge, ops | **Sonnet** | bounded reasoning |
 | author, fixer | **Opus** | deep coding / architecture |
 
-Measured: routing the four non-author roles off Opus cut their cost ~**49%** for
-identical work; Opus stays reserved for writing code.
-
 **Override per runner** (a value is a tier alias `haiku`/`sonnet`/`opus` or a full
 model id). Precedence: `OUTERLOOP_MODEL_<ROLE>` > `OUTERLOOP_MODELS` > `OUTERLOOP_MODEL` > default.
 

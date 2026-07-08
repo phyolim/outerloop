@@ -364,6 +364,12 @@ function ActivityFeed({ events, live }: { events: AgentEvent[]; live: boolean })
   )
 }
 
+// "claude-haiku-4-5-20251001" -> "H4.5", "claude-opus-4-8" -> "O4.8"
+function abbrevModel(m: string): string {
+  const match = m.match(/^claude-([a-z]+)-(\d+)-(\d+)/)
+  return match ? `${match[1][0].toUpperCase()}${match[2]}.${match[3]}` : m
+}
+
 function RunsPanel({ runs }: { runs: AgentRun[] }) {
   const total = runs.reduce((s, r) => s + r.tokens_in + r.tokens_out, 0)
   return (
@@ -388,7 +394,14 @@ function RunsPanel({ runs }: { runs: AgentRun[] }) {
                 </a>
               ) : null}
             </span>
-            <span className="text-tx3">{fmtTokens(r.tokens_in + r.tokens_out)}</span>
+            <span className="text-tx3">
+              {r.model ? (
+                <span title={r.model} className="mr-2 cursor-default">
+                  {abbrevModel(r.model)}
+                </span>
+              ) : null}
+              {fmtTokens(r.tokens_in + r.tokens_out)}
+            </span>
           </div>
         ))}
       </div>

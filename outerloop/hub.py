@@ -12,7 +12,7 @@ import uuid
 from http.server import ThreadingHTTPServer
 from urllib.parse import urlparse
 
-from . import api, auth, config, db, gate, leasing, pairing, scoring, tick, triage
+from . import api, auth, config, db, gate, git_ops, leasing, pairing, scoring, tick, triage, warmup
 from . import __file__ as _pkg_init, __version__
 from .context import Ctx
 from .handlers import get_handler
@@ -170,6 +170,7 @@ def scheduler_once():
         ctx = Ctx(conn, config, "sched-" + uuid.uuid4().hex[:8])
         leasing.reclaim_fleet(conn, ctx.tick_id)
         leasing.park_stranded(conn, ctx.tick_id)
+        git_ops.reap_worktrees(ctx)  # this box's own disk (combined role=both included)
         triage.triage_new(ctx)
         scoring.score_unscored(ctx)
         _resume_answered(ctx)
@@ -178,6 +179,10 @@ def scheduler_once():
 
 
 def _scheduler_loop(stop):
+    # The hub runs claude inline too (triage/scorer/groomer) — warm up on THIS
+    # thread before the first tick so its macOS permission prompts also fire at
+    # first start, not mid-triage. Off the HTTP thread so the UI serves immediately.
+    warmup.maybe_warmup()
     while not stop.is_set():
         try:
             scheduler_once()

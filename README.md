@@ -128,6 +128,3 @@ merged.
   brew uninstall --zap --cask outerloop-app
   rm -rf ~/Library/Application\ Support/outerloop   # state — only if you want it gone
   ```
-
-- **Deferred in v0 by design:** auto-merge of green PRs, a real deploy executor, live
-  email/calendar sends. The seams exist; they stay gated or stubbed until then.

@@ -23,6 +23,12 @@ def handle(method, path, body, conn, auth_worker=None, intake_token=None):
         return _op(conn, body, auth_worker)
     if method == "POST" and path == "/api/release":
         return 200, claim.release(conn, int(body["ticket_id"]), int(body["epoch"]))
+    if method == "POST" and path == "/api/reap_check":
+        # A remote worker's disk is invisible to the hub: it sends the ticket ids of
+        # its local worktree dirs and retires the ones the hub says are unresumable —
+        # the same predicate the hub-side reaper applies to its own disk. Read-only.
+        ids = [int(i) for i in (body.get("ticket_ids") or [])]
+        return 200, {"reap": git_ops.unresumable(conn, ids)}
     if method == "POST" and path == "/api/lease/renew":
         r = claim.renew(conn, int(body["ticket_id"]), int(body["epoch"]))
         return (200, r) if r else (409, {"error": "stale epoch on renew"})

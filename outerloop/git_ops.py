@@ -251,45 +251,97 @@ def merge_pr(ctx, ticket, hs):
         return False
     code, _, _ = _run(ctx.cfg, [ctx.cfg.GH_BIN, "pr", "merge", str(hs["pr_number"]),
                       "-R", slug, "--squash"])
-    return code == 0
+    if code != 0:
+        return False
+    # Merged: best-effort remote-branch delete so squashed heads don't accumulate on
+    # GitHub (covers repos without auto-delete). A failure here (protection rule,
+    # already gone) must never turn a successful merge into a failed ticket.
+    if hs.get("branch"):
+        _run(ctx.cfg, [ctx.cfg.GH_BIN, "api", "-X", "DELETE",
+                       f"repos/{slug}/git/refs/heads/{hs['branch']}"])
+    return True
 
 
-def cleanup_worktree(ctx, ticket, hs):
-    """Janitorial: drop the worktree dir and, when the parent clone is on this
-    machine, detach the worktree registration + throwaway branch. Best-effort — the
-    clone may live on another worker; rmtree is the part that must happen here."""
-    path = hs.get("worktree_path")
-    if not path:
-        return
-    if not ctx.cfg.FAKE and ticket["repo_path"]:
-        code, repo, _ = _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", path,
-                             "rev-parse", "--path-format=absolute", "--git-common-dir"])
-        if code == 0 and repo.endswith("/.git"):
-            repo = repo[:-len("/.git")]
-            _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", repo,
-                           "worktree", "remove", "--force", path])
-            if hs.get("branch"):
-                _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", repo, "branch", "-D", hs["branch"]])
-            _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", repo, "worktree", "prune"])
+def retire_worktree(cfg, path, branch=None):
+    """Fully retire one worktree: detach its registration from the parent clone,
+    delete its throwaway branch, prune, then remove the tree. Best-effort at every
+    step — the clone may live on another worker, or the dir may not be a git
+    worktree at all (FAKE); rmtree is the part that must always happen here."""
+    path = str(path)
+    code, repo, _ = _run(cfg, [config.GIT_BIN, "-C", path,
+                         "rev-parse", "--path-format=absolute", "--git-common-dir"])
+    if code == 0 and repo.endswith("/.git"):
+        repo = repo[:-len("/.git")]
+        if branch is None:
+            code, head, _ = _run(cfg, [config.GIT_BIN, "-C", path,
+                                 "rev-parse", "--abbrev-ref", "HEAD"])
+            # Only auto-delete branches this orchestrator minted (outerloop/...):
+            # a hand-made branch in a stray worktree may hold unmerged human work.
+            branch = head if code == 0 and head.startswith("outerloop/") else None
+        _run(cfg, [config.GIT_BIN, "-C", repo, "worktree", "remove", "--force", path])
+        if branch:
+            _run(cfg, [config.GIT_BIN, "-C", repo, "branch", "-D", branch])
+        _run(cfg, [config.GIT_BIN, "-C", repo, "worktree", "prune"])
     shutil.rmtree(path, ignore_errors=True)
 
 
-def reap_worktrees(ctx):
-    """Remove worktrees whose ticket is no longer live (must-fix #7). Live includes
-    parked-with-sub_stage (paused/terminated mid-flight): those are resumable in
-    place, so their workspace must survive until they're resumed, revived, or closed."""
-    conn = ctx.conn
+def cleanup_worktree(ctx, ticket, hs):
+    """Janitorial after a merge: drop the worktree dir and, when the parent clone is
+    on this machine, detach the worktree registration + throwaway branch."""
+    path = hs.get("worktree_path")
+    if not path:
+        return
+    if ctx.cfg.FAKE or not ticket["repo_path"]:
+        shutil.rmtree(path, ignore_errors=True)
+        return
+    retire_worktree(ctx.cfg, path, hs.get("branch"))
+
+
+def local_ticket_dirs():
+    """{ticket_id: [dirs]} for this machine's WORKTREES_DIR. Shared by the hub-side
+    reaper and the worker's remote sweep so both see dirs the same way."""
+    dirs = {}
     for d in config.WORKTREES_DIR.glob("ticket-*"):
         try:
-            tid = int(d.name.split("-")[1])
+            dirs.setdefault(int(d.name.split("-")[1]), []).append(d)
         except (IndexError, ValueError):
             continue
+    return dirs
+
+
+def unresumable(conn, ticket_ids):
+    """Subset of ticket_ids whose workspace is safe to retire: not active/blocked, and
+    not parked/failed WITH a sub_stage (pause-Resume and failed-Retry re-enter that
+    stage in place and need the tree). The single liveness predicate — used by the
+    local reaper and by /api/reap_check for remote workers' sweeps."""
+    out = []
+    for tid in ticket_ids:
         row = conn.execute("SELECT status, sub_stage FROM ticket WHERE id=?",
                            (tid,)).fetchone()
         if row and (row["status"] in ("active", "blocked")
-                    or (row["status"] == "parked" and row["sub_stage"])):
+                    or (row["status"] in ("parked", "failed") and row["sub_stage"])):
             continue
-        shutil.rmtree(d, ignore_errors=True)
-        db.append_audit(conn, "recovery", "worktree_reaped",
-                        f"removed orphan worktree {d.name}", ticket_id=tid,
-                        tick_id=ctx.tick_id)
+        out.append(tid)
+    return out
+
+
+def reap_worktrees(ctx):
+    """Retire worktrees (dir + clone registration + throwaway branch) whose ticket is
+    no longer resumable (must-fix #7). Runs on the box whose disk holds the trees: the
+    tick (cron mode) and the hub scheduler (fleet mode, covers the combined box);
+    remote workers sweep their own disk through /api/reap_check."""
+    conn = ctx.conn
+    dirs = local_ticket_dirs()
+    for tid in unresumable(conn, sorted(dirs)):
+        row = conn.execute("SELECT handler_state FROM ticket WHERE id=?", (tid,)).fetchone()
+        # The branch name is machine-independent (same on every clone); prefer the
+        # ticket's record, else retire_worktree derives it from the tree's HEAD.
+        branch = db.hstate(row).get("branch") if row else None
+        for d in dirs[tid]:
+            retire_worktree(ctx.cfg, d, branch)
+            # ticket_id only when the row exists: audit.ticket_id is FK-constrained, and
+            # a dir with no ticket row would otherwise crash the tick top-half here.
+            db.append_audit(conn, "recovery", "worktree_reaped",
+                            f"removed orphan worktree {d.name}"
+                            + (f" and branch {branch}" if branch else ""),
+                            ticket_id=tid if row else None, tick_id=ctx.tick_id)

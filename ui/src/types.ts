@@ -32,6 +32,7 @@ export interface TicketsResponse {
     all: number
   }
   projects: string[]
+  repos: string[]
 }
 
 // Inbox v2: the two sections decisions.json doesn't cover.

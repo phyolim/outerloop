@@ -20,18 +20,11 @@ def breakdown(t):
     return f"score {s} = (I{t['impact']} x U{t['urgency']} x C{t['confidence']}) / E{t['effort']}"
 
 
-def estimate_factors(ctx, t):
-    """Ask the scorer agent for the four 1..5 factors + a one-line justification each.
-    The factors are stored RAW so nothing about the priority is a black box."""
-    res = agent.run_agent(
-        ctx, "scorer",
-        prompt=f"Rate this ticket.\nTITLE: {t['title']}\nBODY: {t['body']}",
-        ticket_id=t["id"], ticket=t,
-        json_schema="scorer",
-    )
-    d = res["data"]
-
-    def factor(k):  # tolerate a missing/garbled factor rather than crash the tick top-half
+def factors_from_data(d):
+    """Extract the four 1..5 factors + reversibility + justification from an agent
+    result dict, tolerating missing/garbled fields (default 3) rather than crashing
+    the tick top-half. Shared by the scorer role and the combined triage role."""
+    def factor(k):
         try:
             return max(1, min(5, int(d.get(k, 3))))
         except (TypeError, ValueError):
@@ -42,6 +35,18 @@ def estimate_factors(ctx, t):
         d.get("reversibility", "reversible"),
         d.get("justification", ""),
     )
+
+
+def estimate_factors(ctx, t):
+    """Ask the scorer agent for the four 1..5 factors + a one-line justification each.
+    The factors are stored RAW so nothing about the priority is a black box."""
+    res = agent.run_agent(
+        ctx, "scorer",
+        prompt=f"Rate this ticket.\nTITLE: {t['title']}\nBODY: {t['body']}",
+        ticket_id=t["id"], ticket=t,
+        json_schema="scorer",
+    )
+    return factors_from_data(res["data"])
 
 
 def score_unscored(ctx):
