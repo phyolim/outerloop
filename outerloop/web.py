@@ -552,6 +552,59 @@ class Handler(BaseHTTPRequestHandler):
             db.append_audit(conn, "human", "staffing_set",
                             f"{project}: {role} → {name or '(default)'}")
             return self._json_send({"ok": True})
+        if path == "/ui/project-create":
+            # Register a project so it exists (and can carry a repo) with zero tickets.
+            name = (body.get("name") or "").strip()
+            if not name:
+                return self._json_send({"error": "name required"}, 400)
+            repo, rerr = git_ops.normalize_repo_path(body.get("repo"))
+            if rerr:
+                return self._json_send({"error": rerr}, 400)
+            with db.immediate(conn):
+                if self._project_exists(conn, name):
+                    return self._json_send({"error": f"project “{name}” already exists"}, 409)
+                conn.execute("INSERT INTO project(name, repo) VALUES(?,?)", (name, repo))
+                db.append_audit(conn, "human", "project_created", f"project '{name}' created")
+            return self._json_send({"ok": True, "name": name})
+        if path == "/ui/project-edit":
+            # Rename (cascades to ticket labels + staffing key) and/or set the repo.
+            old = (body.get("old_name") or "").strip()
+            name = (body.get("name") or "").strip()
+            if not old or not name:
+                return self._json_send({"error": "name required"}, 400)
+            repo, rerr = git_ops.normalize_repo_path(body.get("repo"))
+            if rerr:
+                return self._json_send({"error": rerr}, 400)
+            renamed = name.lower() != old.lower()
+            with db.immediate(conn):
+                if renamed and self._project_exists(conn, name):
+                    return self._json_send({"error": f"project “{name}” already exists"}, 409)
+                # Upsert the registry row so a label-only project gains one on first edit.
+                conn.execute("INSERT INTO project(name, repo) VALUES(?,?)"
+                             " ON CONFLICT(name) DO UPDATE SET repo=excluded.repo", (old, repo))
+                if renamed:
+                    conn.execute("UPDATE project SET name=? WHERE lower(name)=lower(?)",
+                                 (name, old))
+                    conn.execute("UPDATE ticket SET project=?, updated_at=datetime('now')"
+                                 " WHERE lower(project)=lower(?)", (name, old))
+                    personas.rename_project(old, name)
+                db.append_audit(conn, "human", "project_edited",
+                                f"project '{old}'"
+                                + (f" renamed to '{name}'" if renamed else " repo updated"))
+            return self._json_send({"ok": True, "name": name})
+        if path == "/ui/project-delete":
+            # Delete a project: drop the registry row, unfile its tickets, clear staffing.
+            name = (body.get("name") or "").strip()
+            if not name:
+                return self._json_send({"error": "name required"}, 400)
+            with db.immediate(conn):
+                conn.execute("DELETE FROM project WHERE lower(name)=lower(?)", (name,))
+                n = conn.execute("UPDATE ticket SET project=NULL, updated_at=datetime('now')"
+                                 " WHERE lower(project)=lower(?)", (name,)).rowcount
+                personas.delete_project(name)
+                db.append_audit(conn, "human", "project_deleted",
+                                f"project '{name}' deleted ({n} ticket(s) unfiled)")
+            return self._json_send({"ok": True, "unfiled": n})
         if path == "/ui/agent-save":
             # Create/update one persona file in the hub's agents/ dir. Filename is a
             # strict slug (no separators — never a path), README/_-prefix are docs.
@@ -953,9 +1006,23 @@ class Handler(BaseHTTPRequestHandler):
                              for r in rows]}
 
     def _projects(self, conn):
-        return [r["project"] for r in conn.execute(
-            "SELECT DISTINCT project FROM ticket WHERE project IS NOT NULL AND project!=''"
-            " ORDER BY project")]
+        # Canonical project list: ticket labels ∪ the project registry, de-duplicated
+        # case-insensitively (ticket-label case wins when a name exists in both).
+        names = {}
+        for r in conn.execute(
+            "SELECT DISTINCT project FROM ticket WHERE project IS NOT NULL AND project!=''"):
+            names[r["project"].lower()] = r["project"]
+        for r in conn.execute("SELECT name FROM project"):
+            names.setdefault(r["name"].lower(), r["name"])
+        return sorted(names.values(), key=str.lower)
+
+    @staticmethod
+    def _project_exists(conn, name):
+        return bool(
+            conn.execute("SELECT 1 FROM project WHERE lower(name)=lower(?)",
+                         (name,)).fetchone()
+            or conn.execute("SELECT 1 FROM ticket WHERE lower(project)=lower(?) LIMIT 1",
+                            (name,)).fetchone())
 
     def _repos(self, conn):
         # Stored repo_path is already canonical (normalize_repo_path at intake), so
@@ -996,12 +1063,14 @@ class Handler(BaseHTTPRequestHandler):
         for p in sorted(staff):
             if p not in {n.lower() for n in names}:
                 names[p] = None
+        reg = {r["name"].lower(): r["repo"] for r in conn.execute("SELECT name, repo FROM project")}
         out = []
         for name in names:
             repo_row = conn.execute(
                 "SELECT repo_path FROM ticket WHERE project=? AND repo_path IS NOT NULL"
                 " ORDER BY updated_at DESC LIMIT 1", (name,)).fetchone()
-            repo = repo_row["repo_path"] if repo_row else None
+            # Explicit registry repo wins; else the most recent ticket's repo.
+            repo = reg.get(name.lower()) or (repo_row["repo_path"] if repo_row else None)
             open_n = conn.execute(
                 "SELECT COUNT(*) c FROM ticket WHERE project=?"
                 " AND status IN ('inbox','active','blocked','failed')", (name,)).fetchone()["c"]

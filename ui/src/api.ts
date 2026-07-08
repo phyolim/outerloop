@@ -240,3 +240,22 @@ export function setStaffing(payload: {
 }): Promise<{ ok: true }> {
   return postJSON('/ui/staffing-set', payload)
 }
+
+export function createProject(payload: {
+  name: string
+  repo: string
+}): Promise<{ ok: true; name: string }> {
+  return postJSON('/ui/project-create', payload)
+}
+
+export function editProject(payload: {
+  old_name: string
+  name: string
+  repo: string
+}): Promise<{ ok: true; name: string }> {
+  return postJSON('/ui/project-edit', payload)
+}
+
+export function deleteProject(name: string): Promise<{ ok: true; unfiled: number }> {
+  return postJSON('/ui/project-delete', { name })
+}

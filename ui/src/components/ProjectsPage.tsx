@@ -1,8 +1,16 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchProjects, queryKeys, setStaffing } from '../api'
+import {
+  createProject,
+  deleteProject,
+  editProject,
+  fetchProjects,
+  queryKeys,
+  setStaffing,
+} from '../api'
+import { navigate } from '../router'
 import type { ProjectRow, ProjectsResponse } from '../types'
-import { EmptyState, ErrorBanner, PANEL, PageHeader, Select } from './ui'
+import { BTN, EmptyState, ErrorBanner, INPUT, PANEL, PageHeader, Select } from './ui'
 
 /* Projects — per-project staffing: which persona plays which pipeline role.
    The list shows each project's current pairings; the detail page is the team
@@ -135,6 +143,183 @@ function RoleSlot({
   )
 }
 
+function CreateProjectForm({ onDone }: { onDone: () => void }) {
+  const qc = useQueryClient()
+  const [name, setName] = useState('')
+  const [repo, setRepo] = useState('')
+  const create = useMutation({
+    mutationFn: createProject,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.projects() })
+      qc.invalidateQueries({ queryKey: ['tickets'] }) // refresh the create-ticket datalist
+      onDone()
+    },
+  })
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault()
+        if (name.trim()) create.mutate({ name: name.trim(), repo: repo.trim() })
+      }}
+      className={`${PANEL} mb-4 flex flex-wrap items-end gap-3 px-3.5 py-3`}
+    >
+      <div className="min-w-[160px] flex-1">
+        <label className="microlabel mb-1.5 block">Project name</label>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g. banking-app"
+          className={`${INPUT} mono w-full`}
+        />
+      </div>
+      <div className="min-w-[200px] flex-1">
+        <label className="microlabel mb-1.5 block">Repository (optional)</label>
+        <input
+          value={repo}
+          onChange={(e) => setRepo(e.target.value)}
+          placeholder="~/code/my-app or github URL"
+          className={`${INPUT} mono w-full text-xs`}
+        />
+      </div>
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={onDone} className={BTN.subtle}>
+          Cancel
+        </button>
+        <button type="submit" disabled={create.isPending || !name.trim()} className={BTN.primary}>
+          {create.isPending ? 'Creating…' : 'Create'}
+        </button>
+      </div>
+      {create.isError ? (
+        <span className="mono w-full text-[11px] text-bad">{(create.error as Error).message}</span>
+      ) : null}
+    </form>
+  )
+}
+
+function ManagePanel({ project }: { project: ProjectRow }) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [confirmDel, setConfirmDel] = useState(false)
+  const [name, setName] = useState(project.name)
+  const [repo, setRepo] = useState(project.repo ?? '')
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.projects() })
+    qc.invalidateQueries({ queryKey: ['tickets'] })
+  }
+  const edit = useMutation({
+    mutationFn: editProject,
+    onSuccess: (r) => {
+      setEditing(false)
+      invalidate()
+      if (r.name !== project.name) navigate(`/projects/${encodeURIComponent(r.name)}`)
+    },
+  })
+  const del = useMutation({
+    mutationFn: deleteProject,
+    onSuccess: () => {
+      invalidate()
+      navigate('/projects')
+    },
+  })
+
+  if (editing)
+    return (
+      <form
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (name.trim())
+            edit.mutate({ old_name: project.name, name: name.trim(), repo: repo.trim() })
+        }}
+        className={`${PANEL} flex flex-col gap-2.5 px-3.5 py-3`}
+      >
+        <p className="microlabel">edit project</p>
+        <div>
+          <label className="microlabel mb-1.5 block">Name</label>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className={`${INPUT} mono w-full`}
+          />
+        </div>
+        <div>
+          <label className="microlabel mb-1.5 block">Repository</label>
+          <input
+            value={repo}
+            onChange={(e) => setRepo(e.target.value)}
+            placeholder="~/code/my-app or github URL"
+            className={`${INPUT} mono w-full text-xs`}
+          />
+        </div>
+        {name.trim().toLowerCase() !== project.name.toLowerCase() ? (
+          <p className="text-[11px] leading-relaxed text-tx3">
+            Renames the label on all {project.open} open ticket{project.open === 1 ? '' : 's'} and
+            moves its staffing.
+          </p>
+        ) : null}
+        {edit.isError ? (
+          <span className="mono text-[11px] text-bad">{(edit.error as Error).message}</span>
+        ) : null}
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false)
+              setName(project.name)
+              setRepo(project.repo ?? '')
+            }}
+            className={BTN.subtle}
+          >
+            Cancel
+          </button>
+          <button type="submit" disabled={edit.isPending || !name.trim()} className={BTN.primary}>
+            {edit.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </form>
+    )
+
+  return (
+    <div className={`${PANEL} flex flex-col gap-2.5 px-3.5 py-3`}>
+      <p className="microlabel">manage</p>
+      {confirmDel ? (
+        <>
+          <p className="text-[11px] leading-relaxed text-tx3">
+            Delete <b className="mono text-tx2">{project.name}</b>? Its {project.open} open ticket
+            {project.open === 1 ? '' : 's'} {project.open === 1 ? 'is' : 'are'} unfiled (not deleted)
+            and its staffing is cleared.
+          </p>
+          {del.isError ? (
+            <span className="mono text-[11px] text-bad">{(del.error as Error).message}</span>
+          ) : null}
+          <div className="flex items-center justify-end gap-2">
+            <button onClick={() => setConfirmDel(false)} className={BTN.subtle}>
+              Cancel
+            </button>
+            <button
+              onClick={() => del.mutate(project.name)}
+              disabled={del.isPending}
+              className={BTN.danger}
+            >
+              {del.isPending ? 'Deleting…' : 'Delete project'}
+            </button>
+          </div>
+        </>
+      ) : (
+        <div className="flex items-center gap-2">
+          <button onClick={() => setEditing(true)} className={BTN.subtle}>
+            Edit
+          </button>
+          <button onClick={() => setConfirmDel(true)} className={BTN.danger}>
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ProjectDetail({ data, name }: { data: ProjectsResponse; name: string }) {
   const project = data.projects.find((p) => p.name.toLowerCase() === name.toLowerCase())
   if (!project)
@@ -190,6 +375,7 @@ function ProjectDetail({ data, name }: { data: ProjectsResponse; name: string })
               </div>
             </div>
           </div>
+          <ManagePanel key={project.name} project={project} />
           <p className="text-[11px] leading-relaxed text-tx3">
             Staffing is hub-owned: assignments here ship to every worker on the next
             heartbeat — no restart. Personas are defined on the{' '}
@@ -204,18 +390,31 @@ function ProjectDetail({ data, name }: { data: ProjectsResponse; name: string })
   )
 }
 
-export default function ProjectsPage({ name }: { name?: string }) {
-  const { data, isError } = useQuery({ queryKey: queryKeys.projects(), queryFn: fetchProjects })
-  if (isError) return <ErrorBanner />
-  if (!data) return null
-  if (name) return <ProjectDetail data={data} name={name} />
+function ProjectsList({ data }: { data: ProjectsResponse }) {
+  const [creating, setCreating] = useState(false)
   return (
     <>
       <PageHeader
         title="Projects"
         subtitle="Per-project staffing — assign personas to roles, like staffing a team."
+        right={
+          !creating ? (
+            <button onClick={() => setCreating(true)} className={BTN.primary}>
+              New project
+            </button>
+          ) : null
+        }
       />
+      {creating ? <CreateProjectForm onDone={() => setCreating(false)} /> : null}
       <ProjectList data={data} />
     </>
   )
+}
+
+export default function ProjectsPage({ name }: { name?: string }) {
+  const { data, isError } = useQuery({ queryKey: queryKeys.projects(), queryFn: fetchProjects })
+  if (isError) return <ErrorBanner />
+  if (!data) return null
+  if (name) return <ProjectDetail data={data} name={name} />
+  return <ProjectsList data={data} />
 }

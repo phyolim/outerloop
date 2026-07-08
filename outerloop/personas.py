@@ -192,6 +192,12 @@ def save_assignment(project, role, persona_name):
         slot.pop(role.lower(), None)
     if not slot:
         m.pop(project, None)
+    return _write_staffing(m)
+
+
+def _write_staffing(m):
+    """Rewrite staffing.yml canonically from the map. Hand-written comments do not
+    survive — the file is regenerated on every change."""
     lines = ["# outerloop staffing: which persona plays which role, per project.",
              "# Edited from the Projects page; regenerated on every change."]
     for p in sorted(m):
@@ -201,6 +207,26 @@ def save_assignment(project, role, persona_name):
     config.STAFFING_FILE.write_text("\n".join(lines) + "\n")
     _staffing_cache["sig"] = None  # next load re-reads
     return m
+
+
+def rename_project(old, new):
+    """Move a project's staffing slots to a new key (Projects-page rename). No-op —
+    and no file rewrite — if the project has no staffing entries."""
+    m = {p: dict(rs) for p, rs in load_staffing().items()}
+    slots = m.pop(old.strip().lower(), None)
+    if slots is None:
+        return m
+    new = new.strip().lower()
+    m[new] = {**m.get(new, {}), **slots}   # merge if the target already had staffing
+    return _write_staffing(m)
+
+
+def delete_project(name):
+    """Drop a project's staffing slots (Projects-page delete). No-op if none exist."""
+    m = {p: dict(rs) for p, rs in load_staffing().items()}
+    if m.pop(name.strip().lower(), None) is None:
+        return m
+    return _write_staffing(m)
 
 
 def staffing_map():

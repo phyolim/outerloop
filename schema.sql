@@ -174,3 +174,12 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- User-declared projects (grouping labels). A project also exists implicitly via
+-- any ticket.project label or staffing.yml key; this registry lets one exist — and
+-- carry an explicit repo — with zero tickets, and is what the Projects page edits.
+CREATE TABLE IF NOT EXISTS project (
+    name       TEXT PRIMARY KEY,
+    repo       TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
