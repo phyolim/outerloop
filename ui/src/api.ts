@@ -131,6 +131,17 @@ export function workerCaps(payload: {
   return postJSON('/ui/worker-caps', payload)
 }
 
+export function workerRename(payload: {
+  worker: string
+  new_name: string
+}): Promise<{ ok: true; worker: string }> {
+  return postJSON('/ui/worker-control', { ...payload, action: 'rename' })
+}
+
+export function workerDelete(worker: string): Promise<{ ok: true }> {
+  return postJSON('/ui/worker-control', { worker, action: 'delete' })
+}
+
 export function workerPair(worker: string): Promise<{ worker: string; token: string }> {
   return postJSON('/ui/worker-pair', { worker })
 }

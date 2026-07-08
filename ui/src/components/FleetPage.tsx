@@ -8,7 +8,9 @@ import {
   queryKeys,
   workerCaps,
   workerControl,
+  workerDelete,
   workerPair,
+  workerRename,
 } from '../api'
 import type { PairRequest, Worker } from '../types'
 import { agoSec } from '../lib'
@@ -131,6 +133,9 @@ function CapsEditor({
 function WorkerRow({ d, known }: { d: Worker; known: string[] }) {
   const qc = useQueryClient()
   const [editing, setEditing] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [newName, setNewName] = useState(d.name)
+  const [confirmDel, setConfirmDel] = useState(false)
   const invalidate = () => qc.invalidateQueries({ queryKey: queryKeys.fleet() })
   const ctl = useMutation({ mutationFn: workerControl, onSuccess: invalidate })
   const save = useMutation({
@@ -140,16 +145,81 @@ function WorkerRow({ d, known }: { d: Worker; known: string[] }) {
       invalidate()
     },
   })
+  const rename = useMutation({
+    mutationFn: workerRename,
+    onSuccess: () => {
+      setRenaming(false)
+      invalidate()
+    },
+  })
+  const del = useMutation({ mutationFn: workerDelete, onSuccess: invalidate })
   const off = d.state === 'offline'
+
+  if (renaming) {
+    // Rename takes over the row: the input needs room, and the caveat matters —
+    // a still-running worker heartbeats under its old name and would re-register.
+    return (
+      <div className="flex flex-wrap items-center gap-2.5 border-t border-hairline2 px-4 py-3 first:border-0">
+        <form
+          className="flex items-center gap-1.5"
+          onSubmit={(e) => {
+            e.preventDefault()
+            const v = newName.trim()
+            if (v && v !== d.name) rename.mutate({ worker: d.name, new_name: v })
+            else setRenaming(false)
+          }}
+        >
+          <input
+            value={newName}
+            autoFocus
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setRenaming(false)
+            }}
+            className="mono w-36 rounded-[7px] border border-white/10 bg-well px-2 py-1.5 text-xs text-tx outline-none focus:border-acc/40"
+            aria-label="worker name"
+          />
+          <button
+            disabled={rename.isPending || !newName.trim()}
+            className="rounded-md bg-acc px-2.5 py-1 text-[11px] font-semibold text-ink transition-colors hover:bg-[#5ee79a] disabled:opacity-40"
+          >
+            {rename.isPending ? 'Renaming…' : 'Rename'}
+          </button>
+          <button
+            type="button"
+            onClick={() => setRenaming(false)}
+            className="rounded-md border border-white/[0.12] px-2.5 py-1 text-[11px] text-tx2 transition-colors hover:text-tx"
+          >
+            Cancel
+          </button>
+        </form>
+        {rename.isError ? (
+          <span className="mono text-[11px] text-bad">{(rename.error as Error).message}</span>
+        ) : (
+          <span className="min-w-0 truncate text-[11px] text-tx3">
+            also run <code className="mono">outerloop local worker {newName.trim() || '<name>'}</code> on
+            that machine — a worker still running under “{d.name}” re-registers itself
+          </span>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div
       className="flex items-center gap-4 border-t border-hairline2 px-4 py-3 first:border-0"
       style={{ opacity: off ? 0.55 : 1 }}
     >
-      <span className="mono w-[70px] shrink-0 truncate text-[13px] font-semibold text-tx" title={d.version ? `v${d.version}` : undefined}>
+      <button
+        onClick={() => {
+          setNewName(d.name)
+          setRenaming(true)
+        }}
+        title={`Rename worker${d.version ? ` (v${d.version})` : ''}`}
+        className="mono w-[70px] shrink-0 truncate text-left text-[13px] font-semibold text-tx transition-colors hover:text-acc"
+      >
         {d.name}
-      </span>
+      </button>
       <span
         className="mono w-[82px] shrink-0 text-[11px] font-semibold"
         style={{ color: STATE_COLOR[d.state] ?? '#5d6470' }}
@@ -190,31 +260,66 @@ function WorkerRow({ d, known }: { d: Worker; known: string[] }) {
           )}
         </button>
       )}
-      <span className="flex shrink-0 gap-1.5">
-        {d.state === 'paused' || d.state === 'draining' ? (
-          <button
-            onClick={() => ctl.mutate({ worker: d.name, action: 'resume' })}
-            disabled={ctl.isPending}
-            className="rounded-md border border-acc/40 px-2.5 py-1 text-[11px] text-acc transition-colors hover:bg-acc/10 disabled:opacity-40"
-          >
-            Resume
-          </button>
-        ) : (
+      <span className="flex shrink-0 items-center gap-1.5">
+        {confirmDel ? (
           <>
+            {del.isError ? (
+              <span className="mono text-[11px] text-bad">{(del.error as Error).message}</span>
+            ) : (
+              <span className="text-[11px] text-tx3">
+                Remove <b className="mono text-tx2">{d.name}</b> and revoke its token?
+              </span>
+            )}
             <button
-              onClick={() => ctl.mutate({ worker: d.name, action: 'pause' })}
-              disabled={ctl.isPending}
-              className="rounded-md border border-white/[0.12] px-2.5 py-1 text-[11px] text-tx2 transition-colors hover:text-tx disabled:opacity-40"
+              onClick={() => del.mutate(d.name)}
+              disabled={del.isPending}
+              className="rounded-md border border-bad/40 px-2.5 py-1 text-[11px] font-semibold text-bad transition-colors hover:bg-bad/10 disabled:opacity-40"
             >
-              Pause
+              {del.isPending ? 'Removing…' : 'Remove'}
             </button>
             <button
-              onClick={() => ctl.mutate({ worker: d.name, action: 'drain' })}
-              disabled={ctl.isPending}
-              title="Finish the current ticket, then stop claiming"
-              className="rounded-md border border-warn/30 px-2.5 py-1 text-[11px] text-warn transition-colors hover:bg-warn/[0.08] disabled:opacity-40"
+              onClick={() => setConfirmDel(false)}
+              className="rounded-md border border-white/[0.12] px-2.5 py-1 text-[11px] text-tx2 transition-colors hover:text-tx"
             >
-              Drain
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            {d.state === 'paused' || d.state === 'draining' ? (
+              <button
+                onClick={() => ctl.mutate({ worker: d.name, action: 'resume' })}
+                disabled={ctl.isPending}
+                className="rounded-md border border-acc/40 px-2.5 py-1 text-[11px] text-acc transition-colors hover:bg-acc/10 disabled:opacity-40"
+              >
+                Resume
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={() => ctl.mutate({ worker: d.name, action: 'pause' })}
+                  disabled={ctl.isPending}
+                  className="rounded-md border border-white/[0.12] px-2.5 py-1 text-[11px] text-tx2 transition-colors hover:text-tx disabled:opacity-40"
+                >
+                  Pause
+                </button>
+                <button
+                  onClick={() => ctl.mutate({ worker: d.name, action: 'drain' })}
+                  disabled={ctl.isPending}
+                  title="Finish the current ticket, then stop claiming"
+                  className="rounded-md border border-warn/30 px-2.5 py-1 text-[11px] text-warn transition-colors hover:bg-warn/[0.08] disabled:opacity-40"
+                >
+                  Drain
+                </button>
+              </>
+            )}
+            <button
+              onClick={() => setConfirmDel(true)}
+              title="Remove from fleet — revokes its token; stop the worker first or it re-pairs on its next heartbeat"
+              aria-label={`remove ${d.name}`}
+              className="rounded-md border border-transparent px-1.5 py-1 text-[11px] text-tx3 transition-colors hover:border-bad/30 hover:text-bad"
+            >
+              ✕
             </button>
           </>
         )}

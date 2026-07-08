@@ -191,5 +191,56 @@ assert leasing.park_stranded(c, "test") == [], "a live pinned worker must not be
 c.close()
 print("OK stranded pin: parked after the offline window, untouched while the worker is live")
 
+# --- fleet UI edit: rename carries the row, lease, assignment, and pin along;
+# a collision with an existing worker is refused ---
+c = db.connect()
+with db.immediate(c):
+    c.execute("INSERT INTO worker(name, capabilities, token_hash) VALUES('mbp','[\"dev\"]','th')")
+    c.execute("INSERT INTO ticket(title, body, type, status, pin, requires)"
+              " VALUES('pinned-to-mbp', '', 'knowledge', 'active', 'mbp', '[]')")
+    ptid = c.execute("SELECT id FROM ticket WHERE title='pinned-to-mbp'").fetchone()["id"]
+    c.execute("INSERT INTO lease(ticket_id, owner, pid, boot_uuid, expires_at, worker)"
+              " VALUES(?, 'tick-x', 1, 'bu', datetime('now','+10 minutes'), 'mbp')", (ptid,))
+c.close()
+try:
+    client.post(BASE, "/api/worker/mbp/control", {"action": "rename", "new_name": "pro"})
+    raise SystemExit("FAIL: rename onto an existing worker was accepted")
+except client.APIError as e:
+    assert e.code == 409, f"expected 409 on name collision, got {e.code}"
+client.post(BASE, "/api/worker/mbp/control", {"action": "rename", "new_name": "studio"})
+c = db.connect()
+row = c.execute("SELECT token_hash FROM worker WHERE name='studio'").fetchone()
+assert row and row["token_hash"] == "th", "renamed row must keep its token"
+assert not c.execute("SELECT 1 FROM worker WHERE name='mbp'").fetchone(), "old name lingers"
+assert c.execute("SELECT worker FROM lease WHERE ticket_id=?", (ptid,)).fetchone()["worker"] == "studio"
+assert c.execute("SELECT pin FROM ticket WHERE id=?", (ptid,)).fetchone()["pin"] == "studio"
+c.close()
+print("OK rename: row+token, lease, and pin all follow the new name; collisions 409")
+
+# --- fleet UI delete: row + token gone, in-flight lease fenced (epoch bump) and
+# freed, unleased pinned tickets parked (revivable) instead of routed anywhere ---
+c = db.connect()
+ep0 = c.execute("SELECT claim_epoch FROM ticket WHERE id=?", (ptid,)).fetchone()["claim_epoch"]
+with db.immediate(c):
+    c.execute("INSERT INTO ticket(title, body, type, status, pin, requires)"
+              " VALUES('pinned-unleased', '', 'knowledge', 'active', 'studio', '[]')")
+    utid = c.execute("SELECT id FROM ticket WHERE title='pinned-unleased'").fetchone()["id"]
+c.close()
+client.post(BASE, "/api/worker/studio/control", {"action": "delete"})
+c = db.connect()
+assert not c.execute("SELECT 1 FROM worker WHERE name='studio'").fetchone(), "worker row survived delete"
+assert not c.execute("SELECT 1 FROM lease WHERE ticket_id=?", (ptid,)).fetchone(), "lease survived delete"
+t = c.execute("SELECT claim_epoch, assigned_worker FROM ticket WHERE id=?", (ptid,)).fetchone()
+assert t["claim_epoch"] == ep0 + 1 and t["assigned_worker"] is None, "in-flight ticket not fenced"
+u = c.execute("SELECT status, park_reason FROM ticket WHERE id=?", (utid,)).fetchone()
+assert u["status"] == "parked" and "removed" in u["park_reason"], f"pinned ticket not parked: {tuple(u)}"
+c.close()
+try:
+    client.post(BASE, "/api/worker/studio/control", {"action": "delete"})
+    raise SystemExit("FAIL: deleting a missing worker was accepted")
+except client.APIError as e:
+    assert e.code == 404, f"expected 404 on double delete, got {e.code}"
+print("OK delete: token revoked with the row, lease fenced+freed, pinned work parked")
+
 print("\n=== FLEET MULTI-NODE TESTS PASSED ===")
 srv.shutdown()

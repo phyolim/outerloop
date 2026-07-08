@@ -264,6 +264,53 @@ def _control(conn, name, body):
                          (json.dumps(caps), name))
             db.append_audit(conn, "human", "worker_control", f"{name}: set_caps {caps}")
             return 200, {"ok": True, "capabilities": caps}
+        elif action == "rename":
+            new = (body.get("new_name") or "").strip()[:32]
+            if not new:
+                return 400, {"error": "new_name required"}
+            if new == name:
+                return 200, {"ok": True, "worker": new}
+            if not conn.execute("SELECT 1 FROM worker WHERE name=?", (name,)).fetchone():
+                return 404, {"error": f"no such worker {name!r}"}
+            if conn.execute("SELECT 1 FROM worker WHERE name=?", (new,)).fetchone():
+                return 409, {"error": f"a worker named {new!r} already exists"}
+            # worker.name is referenced by plain TEXT columns (no FK cascade) —
+            # carry the leases, assignments, and pins along with the row.
+            conn.execute("UPDATE worker SET name=? WHERE name=?", (new, name))
+            conn.execute("UPDATE lease SET worker=? WHERE worker=?", (new, name))
+            conn.execute("UPDATE ticket SET assigned_worker=? WHERE assigned_worker=?",
+                         (new, name))
+            conn.execute("UPDATE ticket SET pin=? WHERE pin=?", (new, name))
+            db.append_audit(conn, "human", "worker_control", f"{name}: renamed to {new}")
+            return 200, {"ok": True, "worker": new}
+        elif action == "delete":
+            if not conn.execute("SELECT 1 FROM worker WHERE name=?", (name,)).fetchone():
+                return 404, {"error": f"no such worker {name!r}"}
+            # Fence any in-flight ticket (epoch bump -> the removed worker's next
+            # write is stale and abandoned) and free its lease so the work re-routes.
+            for r in conn.execute("SELECT ticket_id FROM lease WHERE worker=?",
+                                  (name,)).fetchall():
+                conn.execute("UPDATE ticket SET claim_epoch=claim_epoch+1,"
+                             " assigned_worker=NULL WHERE id=?", (r["ticket_id"],))
+                db.append_audit(conn, "human", "lease_reclaimed",
+                                f"lease freed: worker {name} removed from fleet",
+                                ticket_id=r["ticket_id"])
+            conn.execute("DELETE FROM lease WHERE worker=?", (name,))
+            # A pin means "run only on this machine" — park those tickets (revivable)
+            # rather than silently letting them route anywhere.
+            for r in conn.execute("SELECT id FROM ticket WHERE status='active' AND pin=?",
+                                  (name,)).fetchall():
+                conn.execute("UPDATE ticket SET status='parked',"
+                             " park_reason='pinned worker removed',"
+                             " updated_at=datetime('now') WHERE id=?", (r["id"],))
+                db.append_audit(conn, "human", "parked",
+                                f"pinned worker '{name}' removed from fleet",
+                                ticket_id=r["id"], to_stage="parked")
+            # Dropping the row also drops token_hash — the bearer token is revoked.
+            conn.execute("DELETE FROM worker WHERE name=?", (name,))
+            db.append_audit(conn, "human", "worker_control",
+                            f"{name}: removed from fleet, token revoked")
+            return 200, {"ok": True}
         else:
             return 400, {"error": f"unknown action {action!r}"}
         db.append_audit(conn, "human", "worker_control", f"{name}: {action}")

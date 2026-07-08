@@ -463,7 +463,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/ui/worker-control":
             from . import api
             code, resp = api._control(conn, body["worker"], {"action": body.get("action"),
-                                                             "ticket_id": body.get("ticket_id")})
+                                                             "ticket_id": body.get("ticket_id"),
+                                                             "new_name": body.get("new_name")})
             return self._json_send(resp, code)
         if path == "/ui/worker-caps":
             from . import api
