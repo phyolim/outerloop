@@ -111,7 +111,47 @@ export interface AgentRun {
   tokens_in: number
   tokens_out: number
   exit_code: number | null
+  persona: string | null // roster identity the run embodied (staffing legibility)
   at: string
+}
+
+// Staffing (Projects + Agents pages): the persona roster + per-project role slots.
+export interface AgentPersona {
+  name: string
+  description: string
+  roles: string[] // [] = plays any role
+  projects: string[] // [] = generalist
+  model: string // '' = role default
+  body: string
+  file: string // filename inside AgentsResponse.dir
+  content: string // full raw file (what the editor edits)
+  last_at: string | null
+  pairings: { project: string; role: string }[]
+}
+export interface AgentsResponse {
+  agents: AgentPersona[]
+  dir: string
+  roles: string[]
+  tiers: string[]
+}
+export interface RoleResolution {
+  persona: string | null
+  model: string | null
+  why: string // 'project staffing: x' | 'persona glob y' | 'generalist' | 'no persona'
+}
+export interface ProjectRow {
+  name: string
+  repo: string | null
+  open: number
+  staffing: Record<string, string> // explicit staffing.yml entries
+  resolution: Record<string, RoleResolution> // per role: what WOULD run + why
+  coverage: boolean
+}
+export interface ProjectsResponse {
+  projects: ProjectRow[]
+  roles: string[]
+  staffing_file: string
+  agents: string[] // roster names, for the assign picker
 }
 
 export interface Factors {

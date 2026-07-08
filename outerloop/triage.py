@@ -39,7 +39,7 @@ def triage_new(ctx):
             res = agent.run_agent(
                 ctx, "triage",
                 prompt=f"Is this a real, actionable ticket or junk?\nTITLE: {t['title']}\nBODY: {t['body']}",
-                ticket_id=t["id"], json_schema="triage",
+                ticket_id=t["id"], ticket=t, json_schema="triage",
             )
             keep = bool(res["data"].get("keep", True))
             reason = res["data"].get("reason", reason)

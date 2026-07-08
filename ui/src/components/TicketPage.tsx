@@ -378,6 +378,15 @@ function RunsPanel({ runs }: { runs: AgentRun[] }) {
           >
             <span className={r.exit_code != null && r.exit_code !== 0 ? 'text-bad' : 'text-tx2'}>
               {r.role}
+              {r.persona ? (
+                <a
+                  href={`/agents/${encodeURIComponent(r.persona)}`}
+                  className="text-proj hover:underline"
+                >
+                  {' '}
+                  · {r.persona}
+                </a>
+              ) : null}
             </span>
             <span className="text-tx3">{fmtTokens(r.tokens_in + r.tokens_out)}</span>
           </div>

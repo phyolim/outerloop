@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, auth, config, db, git_ops, pairing, scoring, taxonomy
+from . import __version__, auth, config, db, git_ops, pairing, personas, scoring, taxonomy
 
 
 def _ctx_public(ctx):
@@ -188,6 +188,10 @@ class Handler(BaseHTTPRequestHandler):
                                      "seed_caps": config.DEFAULT_CAPS})
                 elif u.path == "/ui/insights.json":
                     self._json_send(self._insights_json(conn))
+                elif u.path == "/ui/agents.json":
+                    self._json_send(self._agents_json(conn))
+                elif u.path == "/ui/projects.json":
+                    self._json_send(self._projects_json(conn))
                 elif u.path == "/ui/ticket.json":
                     tid = parse_qs(u.query).get("id", [None])[0]
                     data = self._ticket_json(conn, int(tid)) if tid and tid.isdigit() else None
@@ -535,6 +539,35 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/ui/pair-ignore":
             pairing.ignore(str(body.get("request_id") or ""))
             return self._json_send({"ok": True})
+        if path == "/ui/staffing-set":
+            # Assign (or clear, persona="") one project × role slot in staffing.yml.
+            project = (body.get("project") or "").strip()
+            role = (body.get("role") or "").strip().lower()
+            name = (body.get("persona") or "").strip()
+            if not project or role not in config.ROLE_MODEL_DEFAULTS:
+                return self._json_send({"error": "project and a valid role required"}, 400)
+            if name and not personas.by_name(name):
+                return self._json_send({"error": f"no persona named '{name}'"}, 400)
+            personas.save_assignment(project, role, name or None)
+            db.append_audit(conn, "human", "staffing_set",
+                            f"{project}: {role} → {name or '(default)'}")
+            return self._json_send({"ok": True})
+        if path == "/ui/agent-save":
+            # Create/update one persona file in the hub's agents/ dir. Filename is a
+            # strict slug (no separators — never a path), README/_-prefix are docs.
+            fname = (body.get("file") or "").strip()
+            content = body.get("content") or ""
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.md", fname) or fname == "README.md":
+                return self._json_send({"error": "file must be <slug>.md"}, 400)
+            if not content.strip():
+                return self._json_send({"error": "content required"}, 400)
+            config.ensure_dirs()
+            (config.AGENTS_DIR / fname).write_text(content)
+            loaded = any(p["file"] == fname for p in personas.load_personas())
+            db.append_audit(conn, "human", "agent_saved",
+                            f"persona file {fname} saved via UI"
+                            + ("" if loaded else " (not loadable — empty body?)"))
+            return self._json_send({"ok": True, "loaded": loaded})
         if path == "/ui/kill-switch":
             # Global stop: claim.py refuses every new claim while it's on. In-flight
             # stages finish (or are paused per-worker); this is the fleet-wide brake.
@@ -774,7 +807,7 @@ class Handler(BaseHTTPRequestHandler):
         comments.sort(key=lambda c: c["at"] or "")
         runs = [{"role": r["role"], "model": r["model"], "tokens_in": r["tokens_in"],
                  "tokens_out": r["tokens_out"], "exit_code": r["exit_code"],
-                 "at": r["created_at"]}
+                 "persona": r["persona"], "at": r["created_at"]}
                 for r in conn.execute("SELECT * FROM agent_run WHERE ticket_id=?"
                                       " ORDER BY id", (tid,)).fetchall()]
         # Live activity: the streamed back-and-forth (text / tool / tool_result) of
@@ -922,6 +955,60 @@ class Handler(BaseHTTPRequestHandler):
         return [r["project"] for r in conn.execute(
             "SELECT DISTINCT project FROM ticket WHERE project IS NOT NULL AND project!=''"
             " ORDER BY project")]
+
+    # -- staffing (Projects + Agents pages) ------------------------------------
+    def _agents_json(self, conn):
+        """The roster with raw file content (for the editor), last activity, and the
+        staffing slots each persona currently fills."""
+        config.ensure_dirs()
+        staff = personas.load_staffing()
+        agents = []
+        for p in personas.load_personas():
+            pairings = [{"project": proj, "role": role}
+                        for proj, slots in sorted(staff.items())
+                        for role, name in sorted(slots.items()) if name == p["name"]]
+            last = conn.execute("SELECT MAX(created_at) m FROM agent_run WHERE persona=?",
+                                (p["name"],)).fetchone()["m"]
+            try:
+                content = (config.AGENTS_DIR / p["file"]).read_text()
+            except OSError:
+                content = ""
+            agents.append({**p, "content": content, "last_at": last, "pairings": pairings})
+        return {"agents": agents, "dir": str(config.AGENTS_DIR),
+                "roles": personas.STAFF_ROLES,
+                "tiers": sorted(config.MODEL_TIERS)}
+
+    def _projects_json(self, conn):
+        """One row per project (ticket labels ∪ staffing keys): repo, open count,
+        explicit staffing, and — per role slot — what would actually run and why
+        (the same resolve() the agents execute, so the page never lies)."""
+        staff = personas.load_staffing()
+        names = dict.fromkeys(self._projects(conn))          # keeps ticket-label case
+        for p in sorted(staff):
+            if p not in {n.lower() for n in names}:
+                names[p] = None
+        out = []
+        for name in names:
+            repo_row = conn.execute(
+                "SELECT repo_path FROM ticket WHERE project=? AND repo_path IS NOT NULL"
+                " ORDER BY updated_at DESC LIMIT 1", (name,)).fetchone()
+            repo = repo_row["repo_path"] if repo_row else None
+            open_n = conn.execute(
+                "SELECT COUNT(*) c FROM ticket WHERE project=?"
+                " AND status IN ('inbox','active','blocked','failed')", (name,)).fetchone()["c"]
+            pseudo = {"project": name, "repo_path": repo}
+            resolution, covered = {}, False
+            for role in personas.STAFF_ROLES:
+                p, why = personas.resolve(role, pseudo)
+                resolution[role] = {"persona": p["name"] if p else None,
+                                    "model": (p or {}).get("model") or None, "why": why}
+                covered = covered or why.startswith(("project staffing", "persona glob"))
+            out.append({"name": name, "repo": repo, "open": open_n,
+                        "staffing": staff.get(name.lower(), {}),
+                        "resolution": resolution, "coverage": covered})
+        return {"projects": out, "roles": personas.STAFF_ROLES,
+                "staffing_file": str(config.STAFFING_FILE),
+                "agents": [p["name"] for p in personas.load_personas()]}
 
 def serve(port=8765):
     db.init_db()

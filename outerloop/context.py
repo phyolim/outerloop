@@ -121,12 +121,13 @@ def _agent_run(ctx, k):
         _fence(conn, k["ticket_id"], k.get("epoch"))
         conn.execute(
             "INSERT INTO agent_run(id, ticket_id, role, tick_id, session_id, prompt,"
-            " model, worktree_path, exit_code, timed_out, output_json, tokens_in, tokens_out)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " model, worktree_path, exit_code, timed_out, output_json, tokens_in,"
+            " tokens_out, persona)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (k["session_id"], k["ticket_id"], k["role"], ctx.tick_id, k["session_id"],
              k["prompt"], k.get("model"), k.get("worktree_path"), k.get("exit_code"),
              k.get("timed_out", 0), k["output_json"],
-             k.get("tokens_in", 0), k.get("tokens_out", 0)))
+             k.get("tokens_in", 0), k.get("tokens_out", 0), k.get("persona")))
         db.append_audit(conn, k["actor"], "agent_run", k["reason"], ticket_id=k["ticket_id"],
                         tick_id=ctx.tick_id, detail=k.get("detail"))
     return {"ok": True}

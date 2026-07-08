@@ -89,6 +89,59 @@ Submits a draft: the next scheduler pass triages it like any new ticket.
 
 `repo_path` is only meaningful for coding kinds (feature/bug/chore).
 
+## GET /ui/agents.json  (persona roster)
+
+```jsonc
+{
+  "agents": [{
+    "name": "fintech-ux", "description": "finance specialist",
+    "roles": ["author", "fixer"],          // [] = plays any role
+    "projects": ["banking-*"],             // [] = generalist
+    "model": "opus",                       // "" = role default
+    "body": "You are…",                    // persona text (frontmatter stripped)
+    "file": "fintech-ux.md",               // filename inside `dir`
+    "content": "---\n…full raw file…",     // what the editor edits
+    "last_at": "2026-07-08 01:00:00",      // last agent_run as this persona, or null
+    "pairings": [{ "project": "banking-app", "role": "author" }]  // staffing slots filled
+  }],
+  "dir": "/…/agents",                      // where the files live (hub data dir)
+  "roles": ["groomer","author","reviewer","fixer","shipper"],
+  "tiers": ["haiku","opus","sonnet"]
+}
+```
+
+## POST /ui/agent-save
+`{ "file": "<slug>.md", "content": "<full file text>" }` → `{ "ok": true, "loaded": bool }`
+(400 on a non-slug filename, README.md, or empty content; `loaded:false` = saved but
+the roster skips it, e.g. empty body.)
+
+## GET /ui/projects.json  (staffing matrix)
+
+One row per project (ticket labels ∪ staffing.yml keys):
+```jsonc
+{
+  "projects": [{
+    "name": "banking-app", "repo": "https://github.com/…", "open": 3,
+    "staffing": { "author": "fintech-ux" },          // explicit staffing.yml entries
+    "resolution": {                                  // per role: what WOULD run + why
+      "author":  { "persona": "fintech-ux", "model": "opus", "why": "project staffing: banking-app" },
+      "reviewer":{ "persona": "generalist", "model": null,   "why": "generalist" },
+      "groomer": { "persona": null,          "model": null,  "why": "no persona" }
+    },
+    "coverage": true      // false = amber "no coverage": nothing specialist matches
+  }],
+  "roles": ["groomer","author","reviewer","fixer","shipper"],
+  "staffing_file": "/…/staffing.yml",
+  "agents": ["fintech-ux", "security-hawk"]          // roster names, for the assign picker
+}
+```
+Resolution precedence (server-side, same code the agents run):
+**project staffing > persona project-glob > generalist > stock prompt.**
+
+## POST /ui/staffing-set
+`{ "project": "banking-app", "role": "author", "persona": "fintech-ux" }` → `{ "ok": true }`
+Empty `persona` clears the slot. 400 on unknown role or persona name.
+
 ## Routing
 The SPA owns every page at its real path — `/`, `/ticket/<id>`, `/decisions`, `/done`,
 `/fleet`, `/parked`, `/log`, `/insights` — via history-API routing (`ui/src/router.ts`;

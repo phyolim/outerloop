@@ -112,6 +112,10 @@ merged.
 - **Models:** cheap models do the trivial work, capable ones the deep work (triage →
   Haiku, review → Sonnet, author → Opus). Override with `--models "author=opus"` or
   `OUTERLOOP_MODEL_<ROLE>`.
+- **Personas:** give agents identities and specialties — like staffing a team. Drop a
+  markdown file in the hub's `agents/` data dir ("a fintech-savvy author for
+  `banking-*` projects", "a food-delivery UX reviewer for `food-*`") and tickets
+  route to the matching specialist by project. See `prompts/agents/README.md`.
 - **State** lives in `~/Library/Application Support/outerloop` — one store shared by the
   CLI, the daemon, and the app. Run **one hub per machine**, and don't mix a brew-services
   hub with a `.pkg` hub on the same box.

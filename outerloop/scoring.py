@@ -26,7 +26,7 @@ def estimate_factors(ctx, t):
     res = agent.run_agent(
         ctx, "scorer",
         prompt=f"Rate this ticket.\nTITLE: {t['title']}\nBODY: {t['body']}",
-        ticket_id=t["id"],
+        ticket_id=t["id"], ticket=t,
         json_schema="scorer",
     )
     d = res["data"]

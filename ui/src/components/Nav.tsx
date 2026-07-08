@@ -8,11 +8,14 @@ import SearchOverlay from './SearchOverlay'
    a blurred top status strip. The one fixed landmark every page shares —
    navigation IS the app's identity. */
 
-// v2 IA: 4 rails organized around the operator's job. Approvals folds into Inbox
+// v2 IA: 6 rails organized around the operator's job. Approvals folds into Inbox
 // (home); On hold / Done / Insights fold into Board / Activity as filters + tabs.
+// Projects and Agents are the staffing pair: who works on what, and who "who" is.
 const TABS = [
   { href: '/', label: 'Inbox', glyph: '◉', match: (p: string) => p === '/' },
   { href: '/board', label: 'Board', glyph: '▤', match: (p: string) => p === '/board' || p.startsWith('/ticket/') },
+  { href: '/projects', label: 'Projects', glyph: '▦', match: (p: string) => p.startsWith('/projects') },
+  { href: '/agents', label: 'Agents', glyph: '✦', match: (p: string) => p.startsWith('/agents') },
   { href: '/fleet', label: 'Fleet', glyph: '⌗', match: (p: string) => p === '/fleet' },
   { href: '/log', label: 'Activity', glyph: '∿', match: (p: string) => p === '/log' },
 ]
