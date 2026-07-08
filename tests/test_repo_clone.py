@@ -1,19 +1,18 @@
-"""git_ops.local_repo + create_worktree exit-code handling. repo_path is CANONICAL,
-machine-independent ticket state (remote URL or a human-typed local path) and is never
-rewritten to a machine-local clone path: each worker resolves it locally on demand.
-(The old ensure_local_clone wrote the claiming box's clone path into the shared ticket
-— mbp cloned, then mini claimed the retry and failed on mbp's path.) Also: a git
-worktree-add failure must surface its stderr, not silently return the never-created
-path. FAKE, throwaway: `_run` is monkeypatched, no real git/gh required."""
+"""'Agent does, code verifies' seam in git_ops: the agent performs clone/worktree/
+commit/push/PR-create inside its stage prompt; this module only VERIFIES outcomes and
+executes the gated merge. repo_path stays CANONICAL, machine-independent ticket state
+(remote URL or a human-typed local path) — never rewritten to one box's clone path
+(a ticket that bounced mbp -> mini failed exactly that way once). FAKE, throwaway:
+`_run` is monkeypatched, no real git/gh required."""
 import os
 import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-os.environ["OUTERLOOP_HOME"] = tempfile.mkdtemp(prefix="inbox-repoclone-")
+os.environ["OUTERLOOP_HOME"] = tempfile.mkdtemp(prefix="inbox-verify-")
 os.environ["OUTERLOOP_FAKE"] = "1"
 
-from outerloop import config, git_ops
+from outerloop import git_ops
 
 
 class _Cfg:
@@ -27,81 +26,106 @@ class _Ctx:
 
 
 ctx = _Ctx()
+URL = "https://github.com/phyolim/inbox-4-simple-tic-tac-toe-game"
 
-# --- an existing local path (or empty) passes through, no subprocess call ---
-git_ops._run = lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not shell out"))
-localdir = tempfile.mkdtemp(prefix="inbox-repoclone-local-")
-repo, err = git_ops.local_repo(ctx, {"repo_path": localdir})
-assert (repo, err) == (localdir, None)
-repo, err = git_ops.local_repo(ctx, {"repo_path": None})
-assert (repo, err) == (None, None)
-print("ok: existing local / empty repo_path passes through with no clone attempt")
+# --- gh_slug: owner/name out of every canonical repo_path shape ---
+for rp in (URL, URL + ".git", URL + "/", "git@github.com:phyolim/inbox-4-simple-tic-tac-toe-game.git"):
+    slug, err = git_ops.gh_slug(ctx, {"repo_path": rp})
+    assert (slug, err) == ("phyolim/inbox-4-simple-tic-tac-toe-game", None), (rp, slug, err)
 
-# --- a local path that does NOT exist on this machine errors clearly (a stale
-# machine-local path from another box must not survive silently) ---
-repo, err = git_ops.local_repo(ctx, {"repo_path": "/gone/on/this/machine"})
-assert repo is None and "does not exist on this machine" in err
-print("ok: a foreign/missing local path errors instead of limping into git -C")
+# a local path reads its origin remote
+localdir = tempfile.mkdtemp(prefix="inbox-verify-local-")
+git_ops._run = lambda cfg, argv, cwd=None: (0, URL + ".git", "")
+slug, err = git_ops.gh_slug(ctx, {"repo_path": localdir})
+assert (slug, err) == ("phyolim/inbox-4-simple-tic-tac-toe-game", None)
 
-# --- a remote URL clones into REPOS_DIR, keyed by repo name ---
-def fake_run_clone_ok(cfg, argv, cwd=None):
-    assert argv[:3] == ["gh", "repo", "clone"]
-    os.makedirs(argv[4], exist_ok=True)
-    return 0, "", ""
+# a local path missing on THIS machine errors clearly (stale cross-machine path)
+slug, err = git_ops.gh_slug(ctx, {"repo_path": "/gone/on/this/machine"})
+assert slug is None and "does not exist on this machine" in err
+print("ok: gh_slug parses URLs/ssh/local-origin; foreign local paths error clearly")
 
+# --- clone_name / worktree_path are deterministic ---
+assert git_ops.clone_name(URL + ".git/") == "inbox-4-simple-tic-tac-toe-game"
+wt = git_ops.worktree_path({"id": 8}, "outerloop/ticket-8-abcd1234")
+assert wt.name == "ticket-8-abcd1234"
+print("ok: clone_name/worktree_path deterministic")
 
-git_ops._run = fake_run_clone_ok
-url = "https://github.com/phyolim/inbox-4-simple-tic-tac-toe-game"
-repo, err = git_ops.local_repo(ctx, {"repo_path": url})
-assert err is None, err
-assert repo == str(config.REPOS_DIR / "inbox-4-simple-tic-tac-toe-game")
-print("ok: URL repo_path resolved to a machine-local clone in REPOS_DIR")
+# --- verify_worktree: trusts git, not the agent ---
+T8 = {"id": 8, "repo_path": URL}
+HS = {"worktree_path": "/some/wt", "branch": "outerloop/ticket-8-abcd1234"}
 
-# --- idempotent: a second call finds the existing clone, no subprocess call ---
-git_ops._run = lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not re-clone"))
-repo2, err2 = git_ops.local_repo(ctx, {"repo_path": url})
-assert (repo2, err2) == (repo, None)
-print("ok: local_repo is idempotent — no re-clone once the dir exists")
+git_ops._run = lambda cfg, argv, cwd=None: (128, "", "fatal: not a git repository")
+base, err = git_ops.verify_worktree(ctx, T8, HS)
+assert base is None and "no git worktree" in err
 
-# --- clone failure surfaces as an error, not a silently-wrong path ---
-git_ops._run = lambda cfg, argv, cwd=None: (128, "", "repository not found")
-repo3, err3 = git_ops.local_repo(ctx, {"repo_path": "https://github.com/x/does-not-exist"})
-assert repo3 is None and "not found" in err3
-print("ok: a failed clone returns a clear error instead of a bogus local path")
-
-# --- create_worktree: `git worktree add` failure must surface, not silently no-op ---
-git_ops._run = lambda cfg, argv, cwd=None: (1, "", "fatal: not a git repository")
-path, err = git_ops.create_worktree(
-    ctx, {"id": 99, "repo_path": url}, "outerloop/ticket-99-deadbeef", "/some/local/clone")
-assert path is None and "not a git repository" in err, (path, err)
-print("ok: create_worktree surfaces git's exit code instead of pretending success")
-
-# --- create_worktree: success returns the path with no error ---
-def fake_run_wt_ok(cfg, argv, cwd=None):
-    os.makedirs(argv[argv.index("add") + 1], exist_ok=True)
-    return 0, "", ""
+git_ops._run = lambda cfg, argv, cwd=None: (0, "main", "")
+base, err = git_ops.verify_worktree(ctx, T8, HS)
+assert base is None and "expected" in err, "wrong branch must fail verification"
 
 
-git_ops._run = fake_run_wt_ok
-path, err = git_ops.create_worktree(
-    ctx, {"id": 100, "repo_path": url}, "outerloop/ticket-100-cafef00d", "/some/local/clone")
-assert err is None and path.exists()
-print("ok: create_worktree returns the path on success")
+def run_wt_ok(cfg, argv, cwd=None):
+    if argv[-1] == "origin/HEAD":
+        return 0, "origin/main", ""
+    return 0, HS["branch"], ""
 
-# --- create_repo returns the canonical URL (from the clone's origin), never the
-# machine-local clone path ---
-def fake_run_create(cfg, argv, cwd=None):
+
+git_ops._run = run_wt_ok
+base, err = git_ops.verify_worktree(ctx, T8, HS)
+assert (base, err) == ("origin/main", None)
+print("ok: verify_worktree checks branch + derives the diff base")
+
+# --- verify_pr: reads the PR from GitHub via -R, never trusts the agent's claim ---
+def run_pr_ok(cfg, argv, cwd=None):
+    assert "-R" in argv and "phyolim/inbox-4-simple-tic-tac-toe-game" in argv
+    return 0, '{"number": 12, "url": "https://github.com/x/pull/12"}', ""
+
+
+git_ops._run = run_pr_ok
+num, url, err = git_ops.verify_pr(ctx, T8, HS["branch"])
+assert (num, url, err) == (12, "https://github.com/x/pull/12", None)
+
+git_ops._run = lambda cfg, argv, cwd=None: (1, "", "no pull requests found")
+num, url, err = git_ops.verify_pr(ctx, T8, HS["branch"])
+assert num is None and "no pull requests" in err
+print("ok: verify_pr resolves via gh -R and surfaces a missing PR")
+
+# --- the gated side needs NO local clone: checks/state/merge all go through -R ---
+calls = []
+
+
+def run_gated(cfg, argv, cwd=None):
+    calls.append(argv)
+    assert cwd is None and "-R" in argv, f"gated call must use -R, not a local cwd: {argv}"
+    if argv[1] == "pr" and argv[2] == "checks":
+        return 0, '[{"state": "SUCCESS"}]', ""
+    if argv[1] == "pr" and argv[2] == "view":
+        return 0, '{"state": "OPEN"}', ""
+    if argv[1] == "pr" and argv[2] == "merge":
+        return 0, "", ""
+    raise AssertionError(argv)
+
+
+git_ops._run = run_gated
+hs = {"pr_number": 12}
+assert git_ops.checks_green(ctx, T8, hs) == (True, "all checks SUCCESS")
+assert git_ops.pr_state(ctx, T8, hs) == "open"
+assert git_ops.merge_pr(ctx, T8, hs) is True
+assert len(calls) == 3
+print("ok: checks/state/merge run clone-free via gh -R")
+
+# --- create_repo returns the canonical URL, never this machine's clone path ---
+def run_create(cfg, argv, cwd=None):
     if argv[:3] == ["gh", "repo", "create"]:
         os.makedirs(os.path.join(str(cwd), argv[3]), exist_ok=True)
         return 0, "", ""
     if argv[-3:] == ["remote", "get-url", "origin"]:
         return 0, "https://github.com/phyolim/inbox-42-shiny-thing.git\n", ""
-    raise AssertionError(f"unexpected argv {argv}")
+    raise AssertionError(argv)
 
 
-git_ops._run = fake_run_create
+git_ops._run = run_create
 url42, err = git_ops.create_repo(ctx, {"id": 42, "title": "shiny thing"})
 assert err == "" and url42 == "https://github.com/phyolim/inbox-42-shiny-thing", (url42, err)
 print("ok: create_repo records the canonical URL, not this machine's clone path")
 
-print("\n=== REPO CLONE / WORKTREE TEST PASSED ===")
+print("\n=== VERIFY-SEAM TEST PASSED ===")

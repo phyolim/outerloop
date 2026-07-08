@@ -12,7 +12,7 @@ the reviewer runs on a strictly later tick fed only the diff (never the author's
 transcript), and the reviewer has no code path to merge. The review<->fix loop is
 hard-capped; merge is always human-gated."""
 
-from .. import agent, db, gate, git_ops, taxonomy
+from .. import agent, config, db, gate, git_ops, taxonomy
 from . import base
 
 
@@ -72,35 +72,46 @@ class CodingHandler(base.Handler):
                          f"No repo set for this ticket. Create new private GitHub repo '{name}'?",
                          {"repo_name": name}, resume_stage="creating_repo")
             return "new repo gated"
-        # Resolve repo_path to THIS machine's clone (cloning a URL on demand). The
-        # ticket's repo_path stays canonical/machine-independent — never rewritten to
-        # a local path, which would strand every other worker in the fleet.
-        repo, err = git_ops.local_repo(ctx, ticket)
-        if err:
-            base.fail(ctx, ticket, f"repo unavailable: {err}")
-            return "repo unavailable -> error"
+        # "Agent does, code verifies": the AUTHOR sets up its own workspace (clone the
+        # canonical repo_path URL if this machine lacks it, add the worktree) because
+        # adapting to a messy environment is what the agent is good at — the code only
+        # picks the deterministic names (branch, worktree path) and verifies afterward.
+        # repo_path itself stays machine-independent; nothing here rewrites it.
         branch = hs.get("branch") or git_ops.new_branch(ticket["id"])
         hs["branch"] = branch
-        wt, err = git_ops.create_worktree(ctx, ticket, branch, repo)
-        if err:
-            base.fail(ctx, ticket, f"worktree creation failed: {err}")
-            return "worktree creation failed -> error"
+        wt = git_ops.worktree_path(ticket, branch)
         hs["worktree_path"] = str(wt)
-        hs.setdefault("base_branch", git_ops.repo_head(ctx, repo))
+        real = not ctx.cfg.FAKE and ticket["repo_path"]
+        if real:
+            # cwd must exist at spawn; WORKTREES_DIR also grants Edit/Write inside the
+            # worktree the agent is about to create under it.
+            config.ensure_dirs()
+            cwd = config.WORKTREES_DIR
+            clone = config.REPOS_DIR / git_ops.clone_name(ticket["repo_path"])
+            setup = (f"FIRST set up the workspace with the shell:\n"
+                     f"1. Ensure a clone of {ticket['repo_path']} exists at {clone}"
+                     f" (clone it there if missing; reuse it if present).\n"
+                     f"2. Ensure the worktree exists: git -C {clone} worktree add"
+                     f" {wt} -b {branch}  (reuse it if it already exists).\n"
+                     f"3. Do ALL implementation work inside {wt}.\n"
+                     f"When finished, COMMIT all your work in {wt} with a descriptive"
+                     f" message. Do NOT push, do NOT open or merge PRs, and do NOT"
+                     f" touch any branch other than {branch} — shipping is the"
+                     f" orchestrator's job.\n\n")
+        else:
+            wt.mkdir(parents=True, exist_ok=True)
+            cwd, setup = wt, ""
         crit = (hs.get("groom") or {}).get("acceptance_criteria", [])
         clars = hs.get("clarifications", [])
         answered = "".join(f"\n  Q: {c['q']}\n  A: {c['a']}" for c in clars)
-        # Bash included so the author can iterate: run tests, start a dev server,
-        # check output. ponytail: full shell shares the user's git/gh creds — an
-        # injection-risk tradeoff accepted deliberately; scope with Bash(...) patterns
-        # if it bites. Orchestrator still owns commit/push/PR, so tell the agent.
-        res = agent.run_agent(ctx, "author", ticket_id=ticket["id"], cwd=wt,
+        # Bash included so the author can set up + iterate: clone, run tests, start a
+        # dev server. ponytail: full shell shares the user's git/gh creds — the durable
+        # main-branch protection is GitHub-side (branch protection / required PRs),
+        # not this prompt; the orchestrator's merge gate is the only sanctioned door.
+        res = agent.run_agent(ctx, "author", ticket_id=ticket["id"], cwd=cwd,
                               worktree_path=wt, allowed_tools="Edit,Write,Bash",
-                              prompt=f"Implement this on branch {branch}.\n"
+                              prompt=f"{setup}Implement this on branch {branch}.\n"
                                      f"{_kind_hint(ticket)}\n"
-                                     f"You may use the shell to run/test your work, but do NOT"
-                                     f" git commit/push or use gh — the orchestrator handles"
-                                     f" commit, push, and the PR after you finish.\n"
                                      f"TITLE: {ticket['title']}\nBODY: {ticket['body']}\n"
                                      f"ACCEPTANCE: {crit}"
                                      + (f"\nEARLIER CLARIFICATIONS (already answered — do NOT"
@@ -136,6 +147,14 @@ class CodingHandler(base.Handler):
                          resume_stage="groomed", pin=ticket["assigned_worker"])
             return "author asked for clarification -> decision queue"
         git_ops.commit_all(ctx, ticket, hs, f"ticket #{ticket['id']}: {ticket['title']}")
+        # Verify, don't trust: the worktree the author claims to have set up must
+        # actually be a git worktree on the right branch. Fail loud with the real
+        # state — never advance an empty workspace to review.
+        base_branch, err = git_ops.verify_worktree(ctx, ticket, hs)
+        if err:
+            base.fail(ctx, ticket, f"author run left no usable worktree: {err}")
+            return "workspace verification failed -> error"
+        hs.setdefault("base_branch", base_branch)
         hs["author_session_id"] = res["session_id"]
         hs["diff_stat"] = res["data"].get("diff_stat", "")
         # Pin to the box that now holds the worktree: every later stage (fixing,
@@ -193,8 +212,9 @@ class CodingHandler(base.Handler):
                               worktree_path=hs.get("worktree_path"),
                               allowed_tools="Edit,Write,Bash",  # shell for iteration, same as author
                               prompt=f"Address the reviewer findings.\nFINDINGS: {findings}\n"
-                                     f"You may use the shell to run/test your work, but do NOT"
-                                     f" git commit/push or use gh — the orchestrator handles that.")
+                                     f"You may use the shell to run/test your work. COMMIT your"
+                                     f" changes here when done. Do NOT push and do NOT open or"
+                                     f" merge PRs — shipping is the orchestrator's job.")
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: fix timed out"
         git_ops.commit_all(ctx, ticket, hs, f"ticket #{ticket['id']}: address review findings")
@@ -202,23 +222,44 @@ class CodingHandler(base.Handler):
                        f"fixer addressed findings (round {hs.get('review_round', 0)})")
         return "fixed -> reviewing"
 
-    # opening_pr -> merge_gate: push + open the PR now that the work is reviewed and stable.
+    # opening_pr -> merge_gate: the SHIPPER agent pushes the branch and opens the PR
+    # (branch-level actions — reversible, and main is protected by the merge gate +
+    # GitHub branch protection); the code then verifies the PR exists via gh -R and
+    # records ONLY what GitHub reports, never what the agent claims.
     # Reality-checked + effect-marked for idempotency (a retried tick won't double-create).
     def _stage_opening_pr(self, ctx, ticket, hs):
         if hs.get("pr_number"):  # reality-check: PR already exists, don't double-create
             base.set_stage(ctx, ticket, "merge_gate", hs, "pr_reused",
                            f"PR #{hs['pr_number']} already open")
             return "pr already open"
-        hs["pending_action"] = {"kind": "pr_create", "branch": hs.get("branch")}
+        branch = hs.get("branch")
+        if ctx.cfg.FAKE or not ticket["repo_path"]:
+            num = 1000 + ticket["id"]
+            hs["pr_number"], hs["pr_url"] = num, f"https://example.invalid/pr/{num}"
+            base.set_stage(ctx, ticket, "merge_gate", hs, "pr_opened",
+                           f"opened PR #{num} (reviewed & stable)",
+                           detail={"pr_url": hs["pr_url"]})
+            return f"opened PR #{num} -> merge gate"
+        hs["pending_action"] = {"kind": "pr_create", "branch": branch}
         base.save_hs(ctx, ticket, hs, "effect_pending", "about to open PR")
-        num, url = git_ops.open_pr(ctx, ticket, hs)
+        res = agent.run_agent(
+            ctx, "shipper", ticket_id=ticket["id"], cwd=hs.get("worktree_path"),
+            worktree_path=hs.get("worktree_path"), allowed_tools="Bash",
+            prompt=f"Ship the reviewed branch {branch} from this worktree:\n"
+                   f"1. Push it: git push -u origin {branch}\n"
+                   f"2. If no PR exists for it yet, open one: gh pr create --fill"
+                   f" --head {branch}  (do NOT create a duplicate if one exists).\n"
+                   f"Do NOT merge anything and do NOT touch any other branch.")
+        if not base.note_agent(ctx, ticket, hs, res):
+            return "failed: shipper timed out"
+        num, url, err = git_ops.verify_pr(ctx, ticket, branch)
         if not num:
             # Never enter merge_gate with pr_number=None — every downstream gh call
             # would degrade confusingly. No state change => the attempts ceiling
             # retries this stage and eventually fails the ticket.
             ctx.write("append_audit", ticket_id=ticket["id"], actor="handler:coding",
                       action="pr_create_failed",
-                      reason=f"gh pr create returned no PR number for branch {hs.get('branch')}")
+                      reason=f"no PR verifiable for branch {branch}: {err or 'unknown'}")
             return "pr create failed (will retry)"
         hs.pop("pending_action", None)
         hs["pr_number"], hs["pr_url"] = num, url

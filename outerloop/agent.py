@@ -43,6 +43,8 @@ def _fake(role, prompt):
         return {"verdict": "approve", "findings": []}
     if role == "fixer":
         return {"summary": "addressed review findings (fake)"}
+    if role == "shipper":
+        return {"pushed": True, "pr_url": "", "summary": "pushed branch + opened PR (fake)"}
     if role == "knowledge":
         return {"deliverable": "# Research notes\n\nKey finding (fake).\n",
                 "summary": "draft produced (fake)"}
@@ -66,6 +68,8 @@ ROLE_SCHEMAS = {
               ' with ONLY {"question": "<the one thing you need the human to clarify>"}.',
     "reviewer": '{"verdict": "approve", "findings": ["..."]}',
     "fixer": '{"summary": "<one line>"}',
+    "shipper": '{"pushed": true, "pr_url": "<the PR url, or empty if it failed>",'
+               ' "summary": "<one line>"}',
     "knowledge": '{"deliverable": "<markdown body>", "summary": "<one line>"}',
     "ops": '{"action": {"kind": "email", "to": "...", "subject": "...", "body": "..."},'
            ' "summary": "<one line>"}',

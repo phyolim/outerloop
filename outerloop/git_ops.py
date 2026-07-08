@@ -1,8 +1,17 @@
-"""git worktree + gh wrappers. All subprocess calls are list-form (never shell=True),
-so ticket-controlled text can't inject args or shell. Coding work is confined to a
-per-ticket worktree on a throwaway, collision-proof branch; the only path to main is
-the human-gated merge. FAKE mode simulates GitHub in handler_state so the lifecycle
-runs with no repo."""
+"""Verify + gate helpers for the coding lifecycle ("agent does, code verifies").
+
+The AGENT performs the environment-sensitive git plumbing inside its stage prompt —
+clone, worktree, branch, commit, push, PR-create — because adapting to a messy
+environment is what it is good at (subprocess plumbing here spent a week accreting
+PATH/URL/exit-code fixes the agent never needed). This module keeps only what must be
+DETERMINISTIC:
+  - verification that the agent's claimed work really exists (worktree commit, PR),
+  - the human-gated actions (repo creation, the merge — the one door to main),
+  - merge preconditions (checks_green) and worktree janitorial work.
+gh reaches GitHub via `-R owner/repo` for PR state/checks/merge, so gating needs no
+local clone at all. All subprocess calls are list-form (never shell=True), so
+ticket-controlled text can't inject args or shell. FAKE mode simulates GitHub in
+handler_state so the lifecycle runs with no repo."""
 
 import json
 import re
@@ -57,42 +66,79 @@ def create_repo(ctx, ticket):
     return re.sub(r"\.git$", "", out.strip()), ""
 
 
-def local_repo(ctx, ticket):
-    """Resolve the ticket's repo_path to a repo directory ON THIS MACHINE, cloning on
-    demand. repo_path is CANONICAL, machine-independent state (a remote URL, or a
-    local path the human typed) and is never rewritten to a machine-local clone path:
-    in a fleet, whichever worker claims a stage resolves it locally — writing one
-    box's clone path into the shared ticket strands every other box (a ticket that
-    bounced mbp -> mini failed exactly that way). Returns (path_or_None, error_or_None);
-    FAKE / empty repo_path passes through (callers keep their existing guards)."""
+def gh_slug(ctx, ticket):
+    """The 'owner/name' GitHub slug for `gh -R`, derived from the ticket's CANONICAL
+    repo_path (a remote URL, or a local path whose origin remote we read). repo_path
+    is machine-independent state and is never rewritten to a machine-local clone path:
+    in a fleet, whichever worker claims a stage resolves what it needs locally —
+    writing one box's clone path into the shared ticket strands every other box (a
+    ticket that bounced mbp -> mini failed exactly that way).
+    Returns (slug_or_None, error_or_None)."""
     repo_path = ticket["repo_path"]
     if ctx.cfg.FAKE or not repo_path:
-        return repo_path, None
+        return None, "no repo_path"
+    url = repo_path
     if not _REMOTE_URL_RE.match(repo_path):
         if not Path(repo_path).exists():
             return None, (f"repo path does not exist on this machine: {repo_path}"
-                          " (use the repo's URL so any worker can clone it)")
-        return repo_path, None
-    name = re.sub(r"\.git$", "", repo_path.rstrip("/")).rsplit("/", 1)[-1]
-    dest = config.REPOS_DIR / name
-    if dest.exists():  # idempotent: this machine already cloned it
-        return str(dest), None
-    config.REPOS_DIR.mkdir(parents=True, exist_ok=True)
-    code, out, err = _run(ctx.cfg, [ctx.cfg.GH_BIN, "repo", "clone", repo_path, str(dest)])
-    if code != 0 or not dest.exists():
-        return None, (err or out or "gh repo clone failed")
-    return str(dest), None
+                          " (use the repo's URL so any worker can resolve it)")
+        code, out, err = _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", repo_path,
+                              "remote", "get-url", "origin"])
+        if code != 0 or not out:
+            return None, (err or f"no origin remote in {repo_path}")
+        url = out
+    m = re.search(r"[:/]([^/:]+/[^/:]+?)(\.git)?/?$", url.strip())
+    if not m:
+        return None, f"could not parse a GitHub owner/repo out of {url!r}"
+    return m.group(1), None
 
 
-def repo_head(ctx, repo):
-    """The repo's current branch — the base a new worktree branches from. Recorded so
-    the reviewer can diff the branch locally (review happens BEFORE any PR exists).
-    `repo` is the machine-local dir from local_repo()."""
-    if ctx.cfg.FAKE or not repo:
-        return "HEAD"
-    _, out, _ = _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", repo,
-                     "rev-parse", "--abbrev-ref", "HEAD"])
-    return out or "HEAD"
+def clone_name(repo_path):
+    """Directory name for this repo's clone under REPOS_DIR (from the URL's last
+    segment). Deterministic so every stage/machine derives the same location."""
+    return re.sub(r"\.git$", "", repo_path.rstrip("/")).rsplit("/", 1)[-1]
+
+
+def worktree_path(ticket, branch):
+    """Deterministic per-ticket worktree location — code picks the path (collision-
+    proof, reapable by name) even though the AGENT creates the tree itself."""
+    return config.WORKTREES_DIR / f"ticket-{ticket['id']}-{branch.rsplit('-', 1)[-1]}"
+
+
+def verify_worktree(ctx, ticket, hs):
+    """Post-author verification: the worktree the agent was told to create really is a
+    git worktree on the right branch with at least one commit. Returns
+    (base_branch_or_None, error_or_None) — base is what branch_diff diffs against.
+    Trust nothing the agent SAID; check what exists."""
+    if ctx.cfg.FAKE or not ticket["repo_path"]:
+        return "HEAD", None
+    wt = hs.get("worktree_path")
+    code, out, err = _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", wt,
+                          "rev-parse", "--abbrev-ref", "HEAD"])
+    if code != 0:
+        return None, f"no git worktree at {wt}: {err or out}"
+    if out != hs.get("branch"):
+        return None, f"worktree is on branch {out!r}, expected {hs.get('branch')!r}"
+    code, base, _ = _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", wt,
+                         "rev-parse", "--abbrev-ref", "origin/HEAD"])
+    return (base if code == 0 and base else "HEAD"), None
+
+
+def verify_pr(ctx, ticket, branch):
+    """Post-shipper verification: read the PR for `branch` straight from GitHub
+    (gh -R — no local clone needed). Returns (number, url, error)."""
+    slug, err = gh_slug(ctx, ticket)
+    if err:
+        return None, "", err
+    code, out, err = _run(ctx.cfg, [ctx.cfg.GH_BIN, "pr", "view", branch,
+                          "-R", slug, "--json", "number,url"])
+    if code != 0:
+        return None, "", (err or out or f"no PR found for branch {branch}")
+    try:
+        data = json.loads(out)
+        return data.get("number"), data.get("url", ""), None
+    except (json.JSONDecodeError, TypeError):
+        return None, "", "could not parse gh pr view output"
 
 
 def branch_diff(ctx, ticket, hs):
@@ -106,48 +152,10 @@ def branch_diff(ctx, ticket, hs):
     return out
 
 
-def create_worktree(ctx, ticket, branch, repo):
-    """Idempotent: reuse an existing tree for this ticket if present. Returns
-    (path_or_None, error_or_None) — a git failure must surface here, not as a
-    confusing FileNotFoundError from whatever later tries to use the never-created
-    path as a subprocess cwd (must-fix: `git worktree add`'s exit code was previously
-    discarded entirely). `repo` is the machine-local dir from local_repo()."""
-    path = config.WORKTREES_DIR / f"ticket-{ticket['id']}-{branch.rsplit('-', 1)[-1]}"
-    if path.exists():
-        return path, None
-    if ctx.cfg.FAKE or not repo:
-        path.mkdir(parents=True, exist_ok=True)
-        return path, None
-    config.WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
-    code, out, err = _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", repo,
-                          "worktree", "add", str(path), "-b", branch])
-    if code != 0 or not path.exists():
-        return None, (err or out or "git worktree add failed")
-    return path, None
-
-
-def open_pr(ctx, ticket, hs):
-    """Push the branch and open a PR. Returns (pr_number, pr_url)."""
-    if ctx.cfg.FAKE or not ticket["repo_path"]:
-        num = 1000 + ticket["id"]
-        return num, f"https://example.invalid/pr/{num}"
-    repo, err = local_repo(ctx, ticket)
-    if err:
-        return None, ""
-    branch, wt = hs["branch"], hs["worktree_path"]
-    _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", wt, "push", "-u", "origin", branch])
-    # `gh pr create` has no --json; it prints the PR URL. Create, then read back the
-    # number+url structurally with `gh pr view`.
-    _run(ctx.cfg, [ctx.cfg.GH_BIN, "pr", "create", "--fill", "--head", branch], cwd=repo)
-    _, out, _ = _run(ctx.cfg, [ctx.cfg.GH_BIN, "pr", "view", branch,
-                     "--json", "number,url"], cwd=repo)
-    data = json.loads(out) if out else {}
-    return data.get("number"), data.get("url", "")
-
-
 def commit_all(ctx, ticket, hs, message):
-    """Commit whatever the author/fixer wrote in the worktree. Deterministic — we don't
-    trust the agent to remember to commit. No-op in FAKE or when nothing is staged."""
+    """Backstop commit for whatever the agent left uncommitted in the worktree. The
+    agent is TOLD to commit its own work; this catches a forgotten commit so an
+    expensive author run is never thrown away over it. No-op in FAKE or when clean."""
     if ctx.cfg.FAKE or not ticket["repo_path"]:
         return
     wt = hs["worktree_path"]
@@ -172,11 +180,11 @@ def checks_green(ctx, ticket, hs):
     allow_no_ci = getattr(ctx.cfg, "ALLOW_MERGE_WITHOUT_CI", False)
     no_ci_msg = NO_CI_STATUS + (
         " (merge allowed by OUTERLOOP_ALLOW_MERGE_WITHOUT_CI)" if allow_no_ci else "")
-    repo, rerr = local_repo(ctx, ticket)
+    slug, rerr = gh_slug(ctx, ticket)
     if rerr:
-        return False, f"could not resolve repo locally: {rerr}"
+        return False, f"could not resolve repo: {rerr}"
     code, out, err = _run(ctx.cfg, [ctx.cfg.GH_BIN, "pr", "checks", str(hs["pr_number"]),
-                          "--json", "state"], cwd=repo)
+                          "-R", slug, "--json", "state"])
     if code != 0 and "no checks" in (out + err).lower():
         return allow_no_ci, no_ci_msg
     try:
@@ -194,11 +202,11 @@ def pr_state(ctx, ticket, hs):
     """'open' | 'merged' | 'closed'. Used for the stale-approval re-check."""
     if ctx.cfg.FAKE or not ticket["repo_path"]:
         return "merged" if hs.get("merged") else "open"
-    repo, err = local_repo(ctx, ticket)
+    slug, err = gh_slug(ctx, ticket)
     if err:
         return "open"
     _, out, _ = _run(ctx.cfg, [ctx.cfg.GH_BIN, "pr", "view", str(hs["pr_number"]),
-                     "--json", "state"], cwd=repo)
+                     "-R", slug, "--json", "state"])
     try:
         return json.loads(out).get("state", "open").lower()
     except (json.JSONDecodeError, TypeError):
@@ -206,24 +214,31 @@ def pr_state(ctx, ticket, hs):
 
 
 def merge_pr(ctx, ticket, hs):
+    """THE gated action — the only path to main, run by the orchestrator strictly
+    after human approval (never by an agent)."""
     if ctx.cfg.FAKE or not ticket["repo_path"]:
         hs["merged"] = True
         return True
-    repo, err = local_repo(ctx, ticket)
+    slug, err = gh_slug(ctx, ticket)
     if err:
         return False
     code, _, _ = _run(ctx.cfg, [ctx.cfg.GH_BIN, "pr", "merge", str(hs["pr_number"]),
-                      "--squash"], cwd=repo)
+                      "-R", slug, "--squash"])
     return code == 0
 
 
 def cleanup_worktree(ctx, ticket, hs):
+    """Janitorial: drop the worktree dir and, when the parent clone is on this
+    machine, detach the worktree registration + throwaway branch. Best-effort — the
+    clone may live on another worker; rmtree is the part that must happen here."""
     path = hs.get("worktree_path")
     if not path:
         return
     if not ctx.cfg.FAKE and ticket["repo_path"]:
-        repo, err = local_repo(ctx, ticket)
-        if not err:
+        code, repo, _ = _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", path,
+                             "rev-parse", "--path-format=absolute", "--git-common-dir"])
+        if code == 0 and repo.endswith("/.git"):
+            repo = repo[:-len("/.git")]
             _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", repo,
                            "worktree", "remove", "--force", path])
             if hs.get("branch"):
