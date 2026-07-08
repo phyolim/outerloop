@@ -117,6 +117,14 @@ export function reviveTicket(ticket_id: number): Promise<{ ok: true }> {
   return postJSON('/ui/revive', { ticket_id })
 }
 
+export function pauseTicket(ticket_id: number): Promise<{ ok: true }> {
+  return postJSON('/ui/pause', { ticket_id })
+}
+
+export function resumeTicket(ticket_id: number): Promise<{ ok: true }> {
+  return postJSON('/ui/resume', { ticket_id })
+}
+
 export function workerControl(payload: {
   worker: string
   action: 'pause' | 'resume' | 'drain'

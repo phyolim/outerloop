@@ -308,6 +308,37 @@ class Handler(BaseHTTPRequestHandler):
         db.append_audit(conn, "human", "revived", "parked ticket sent back to inbox",
                         ticket_id=int(f["ticket_id"]))
 
+    def _pause(self, conn, f):
+        """Pause an active ticket: same stop recipe as _close (fence the in-flight
+        worker via claim_epoch bump, drop the lease) but park it with sub_stage and
+        handler_state intact so /ui/resume re-enters the same stage."""
+        tid = int(f["ticket_id"])
+        with db.immediate(conn):
+            n = conn.execute(
+                "UPDATE ticket SET status='parked', park_reason='paused by human',"
+                " claim_epoch=claim_epoch+1, assigned_worker=NULL,"
+                " updated_at=datetime('now') WHERE id=? AND status='active'", (tid,)).rowcount
+            if n:
+                conn.execute("DELETE FROM lease WHERE ticket_id=?", (tid,))
+                db.append_audit(conn, "human", "paused", "paused by human",
+                                ticket_id=tid)
+        return n
+
+    def _resume(self, conn, f):
+        """Resume a paused ticket in place: back to 'active' at its current sub_stage
+        (unlike _revive, which restarts triage from the inbox). Guarded on sub_stage:
+        a triage-parked ticket never ran, so 'resume' means nothing for it."""
+        tid = int(f["ticket_id"])
+        with db.immediate(conn):
+            n = conn.execute(
+                "UPDATE ticket SET status='active', park_reason=NULL, attempts=0,"
+                " updated_at=datetime('now')"
+                " WHERE id=? AND status='parked' AND sub_stage IS NOT NULL", (tid,)).rowcount
+            if n:
+                db.append_audit(conn, "human", "resumed",
+                                "resumed by human at its paused stage", ticket_id=tid)
+        return n
+
     def _factors(self, conn, f):
         tid = int(f["ticket_id"])
         # Clamp to the 1..5 scale the score model assumes (a raw POST could send 99).
@@ -464,6 +495,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/ui/revive":
             self._revive(conn, body)
             return self._json_send({"ok": True})
+        if path == "/ui/pause":
+            ok = self._pause(conn, body)
+            return self._json_send({"ok": True} if ok else {"error": "not active"},
+                                   200 if ok else 409)
+        if path == "/ui/resume":
+            ok = self._resume(conn, body)
+            return self._json_send({"ok": True} if ok else {"error": "not paused"},
+                                   200 if ok else 409)
         if path == "/ui/worker-control":
             from . import api
             code, resp = api._control(conn, body["worker"], {"action": body.get("action"),
