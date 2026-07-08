@@ -68,6 +68,7 @@ MAX_CLARIFICATIONS = 3      # author may ask the human this many questions befor
 MAX_ATTEMPTS = 12           # per-ticket global stage-entry ceiling -> failed
 MAX_CONSEC_TIMEOUTS = 2     # consecutive agent timeouts on a ticket -> failed
 MAX_PR_CREATE_ATTEMPTS = 3  # shipper runs before a failing PR-create gives up (deterministic errs)
+MAX_RESOLVE_ATTEMPTS = 2    # agent runs to un-conflict a PR before the ticket fails
 MAX_REVIEW_DIFF_CHARS = 100_000  # diffs larger than this gate to a human, never auto-review
 MAX_TICKETS_PER_TICK = 3
 # Budgets are in TOKENS (input + cache_creation + output; cache READS excluded — they

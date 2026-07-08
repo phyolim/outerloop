@@ -1,6 +1,8 @@
 """The coding delivery lifecycle, one bounded stage per cron tick:
 seed -> groomed -> implemented -> reviewing <-> fixing -> opening_pr -> merge_gate
--> merging -> merged -> done (deploy is manual in v0; no executor, no gate).
+-> merging -> merged -> done (deploy is manual in v0; no executor, no gate). A merge
+GitHub refuses because the PR conflicts with base detours merging -> resolving_conflicts
+(an agent merges base into the branch, resolves, pushes) -> merge_gate (re-approval).
 
 Review runs on the LOCAL branch diff, so the PR is opened only once the work is
 reviewed and stable (opening_pr) — never as a half-done draft. Mid-work the author
@@ -40,7 +42,8 @@ class CodingHandler(base.Handler):
         res = agent.run_agent(ctx, "groomer", ticket_id=ticket["id"], ticket=ticket,
                               prompt=f"Expand into tasks + acceptance criteria.\n"
                                      f"{_kind_hint(ticket)}\n"
-                                     f"TITLE: {ticket['title']}\nBODY: {ticket['body']}")
+                                     f"TITLE: {ticket['title']}\nBODY: {ticket['body']}"
+                                     + base.operator_notes(hs))
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: groom timed out"
         hs["groom"] = res["data"]
@@ -210,7 +213,7 @@ class CodingHandler(base.Handler):
         res = agent.run_agent(
             ctx, "reviewer", ticket_id=ticket["id"], ticket=ticket,
             prompt=f"Review this branch diff against the acceptance criteria. ROUND: {rounds_used}\n"
-                   f"ACCEPTANCE: {crit}\nDIFF:\n{diff}")
+                   f"ACCEPTANCE: {crit}{base.operator_notes(hs)}\nDIFF:\n{diff}")
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: review timed out"
         hs["reviewer_session_id"] = res["session_id"]
@@ -249,7 +252,8 @@ class CodingHandler(base.Handler):
                                      f"ACCEPTANCE: {crit}\nFINDINGS: {findings}\n"
                                      f"You may use the shell to run/test your work. COMMIT your"
                                      f" changes here when done. Do NOT push and do NOT open or"
-                                     f" merge PRs — shipping is the orchestrator's job.")
+                                     f" merge PRs — shipping is the orchestrator's job."
+                                     + base.operator_notes(hs))
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: fix timed out"
         # Timed-out fixer: don't commit whatever is lying around and bounce back to the
@@ -361,6 +365,16 @@ class CodingHandler(base.Handler):
         base.save_hs(ctx, ticket, hs, "effect_pending", "about to merge")
         ctx.renew()  # must-fix #6: re-verify the lease right before the irreversible merge
         if not git_ops.merge_pr(ctx, ticket, hs):
+            hs.pop("pending_action", None)
+            # A conflicted PR is workable, not fatal: GitHub refuses the merge until
+            # the branch absorbs what landed on base since it forked. Route to an
+            # agent that resolves the conflicts (never auto-take ours/theirs here).
+            if git_ops.pr_mergeable(ctx, ticket, hs) == "CONFLICTING":
+                base.set_stage(ctx, ticket, "resolving_conflicts", hs, "merge_conflicted",
+                               f"PR #{hs.get('pr_number')} conflicts with"
+                               f" {hs.get('base_branch') or 'the base branch'};"
+                               " sending an agent to resolve and push")
+                return "merge conflicted -> resolving"
             # A broken action is an error, not a go/no-go — fail it so the UI shows the
             # error (with a Retry that re-enters this stage), never approve/reject.
             base.fail(ctx, ticket, f"gh merge failed for PR #{hs.get('pr_number')}")
@@ -370,6 +384,73 @@ class CodingHandler(base.Handler):
         base.set_stage(ctx, ticket, "merged", hs, "merged",
                        f"merged PR #{hs.get('pr_number')} (squash); worktree cleaned up")
         return "merged"
+
+    # resolving_conflicts -> merge_gate: a conflicted PR lands here after GitHub refused
+    # a human-approved merge. "Agent does, code verifies": the AGENT owns the git work
+    # (recreate the workspace if it was reaped, merge base, resolve by hand, push) and
+    # the code only reads back GitHub's mergeability verdict — then RE-GATES the merge,
+    # because the tree the human approved is not the tree that will land.
+    def _stage_resolving_conflicts(self, ctx, ticket, hs):
+        branch = hs.get("branch")
+        base_branch = hs.get("base_branch") or "origin/main"
+        wt = hs.get("worktree_path") or str(git_ops.worktree_path(ticket, branch))
+        hs["worktree_path"] = wt
+        config.ensure_dirs()
+        clone = config.REPOS_DIR / git_ops.clone_name(ticket["repo_path"] or "unset")
+        crit = (hs.get("groom") or {}).get("acceptance_criteria", [])
+        res = agent.run_agent(
+            ctx, "fixer", ticket_id=ticket["id"], ticket=ticket,
+            cwd=config.WORKTREES_DIR, worktree_path=wt, allowed_tools="Edit,Write,Bash",
+            prompt=f"PR #{hs.get('pr_number')} ({hs.get('pr_url')}) for branch {branch} has"
+                   f" merge conflicts with {base_branch}, so GitHub refuses to merge it."
+                   f" Resolve the conflicts.\n"
+                   f"FIRST set up the workspace with the shell (it may have been cleaned up"
+                   f" — the branch still exists on the remote):\n"
+                   f"1. Ensure a clone of {ticket['repo_path']} exists at {clone}"
+                   f" (clone it there if missing; reuse it if present), then fetch:"
+                   f" git -C {clone} fetch origin\n"
+                   f"2. Ensure a worktree for {branch} exists at {wt} (reuse it if present;"
+                   f" if the local branch is gone, recreate it from origin/{branch}).\n"
+                   f"THEN, inside {wt}:\n"
+                   f"3. Run git merge {base_branch} and resolve EVERY conflict by"
+                   f" understanding both sides — keep this ticket's change AND what landed"
+                   f" on {base_branch} since the branch forked. Never blindly take"
+                   f" ours/theirs.\n"
+                   f"4. Verify the result still satisfies the ticket, commit the merge,"
+                   f" and push the branch: git push origin {branch}\n"
+                   f"Do NOT merge the PR itself and do NOT touch any other branch —"
+                   f" merging is the orchestrator's job.\n"
+                   f"TITLE: {ticket['title']}\nBODY: {ticket['body']}\n"
+                   f"ACCEPTANCE: {crit}" + base.operator_notes(hs))
+        if not base.note_agent(ctx, ticket, hs, res):
+            return "failed: conflict resolution timed out"
+        if res["timed_out"]:
+            base.save_hs(ctx, ticket, hs, "resolver_timeout",
+                         "conflict-resolver run timed out; retrying in place")
+            return "resolver timed out (will retry)"
+        # Verify, don't trust: only GitHub's mergeability verdict advances the ticket.
+        # UNKNOWN (still recomputing after the push) advances too — the merging stage
+        # re-checks and routes back here if the conflict is in fact still live.
+        if git_ops.pr_mergeable(ctx, ticket, hs) == "CONFLICTING":
+            tries = hs.get("resolve_attempts", 0) + 1
+            if tries >= ctx.cfg.MAX_RESOLVE_ATTEMPTS:
+                # Clear the counter BEFORE failing (mirrors pr_create_attempts): a human
+                # Retry re-enters this stage and must get a fresh attempt budget.
+                hs.pop("resolve_attempts", None)
+                base.save_hs(ctx, ticket, hs, "resolve_gave_up",
+                             f"clearing retry counter after {tries} attempts")
+                base.fail(ctx, ticket, f"PR #{hs.get('pr_number')} still conflicting"
+                                       f" after {tries} resolution attempts")
+                return "still conflicting (gave up)"
+            hs["resolve_attempts"] = tries
+            base.save_hs(ctx, ticket, hs, "still_conflicting",
+                         f"PR still conflicting after resolver attempt {tries}; retrying")
+            return "still conflicting (will retry)"
+        hs.pop("resolve_attempts", None)
+        base.set_stage(ctx, ticket, "merge_gate", hs, "conflicts_resolved",
+                       f"agent merged {base_branch} into {branch} and pushed;"
+                       " re-gating the merge on the updated tree")
+        return "conflicts resolved -> merge gate"
 
     # merged -> done: v0 has no deploy executor, so there is nothing to gate — a
     # deploy decision would be a mandatory no-op second approval per ticket. Deploy
