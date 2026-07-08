@@ -2,8 +2,7 @@
 
 Deploy the fleet with **[deploy/README.md](deploy/README.md)** — per-machine `.pkg`
 installers for the hub and each worker, LAN (Bonjour `<hub>.local`) or an SSH
-reverse-tunnel relay for remote access. **No Tailscale, no Cloudflare, no OAuth** (that
-stack was retired).
+reverse-tunnel relay for remote access. **No Tailscale, no Cloudflare, no OAuth.**
 
 Quick path:
 
