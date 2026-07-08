@@ -52,14 +52,16 @@ class CodingHandler(base.Handler):
     # the repo, pins repo_path onto the ticket, and routes back to groomed (which now finds
     # a repo_path and proceeds to author). Reject -> fail (can't code without a repo).
     def _stage_creating_repo(self, ctx, ticket, hs):
-        path, err = git_ops.create_repo(ctx, ticket)
+        url, err = git_ops.create_repo(ctx, ticket)
         if err:
             base.fail(ctx, ticket, f"repo creation failed: {err}")
             return "repo creation failed -> error"
-        ctx.write("set_repo_path", ticket_id=ticket["id"], repo_path=str(path))
+        # Record the canonical URL, not this machine's clone path — any worker that
+        # claims a later stage resolves its own local clone (git_ops.local_repo).
+        ctx.write("set_repo_path", ticket_id=ticket["id"], repo_path=url)
         base.set_stage(ctx, ticket, "groomed", hs, "repo_created",
-                       f"created private repo at {path}; continuing")
-        return f"created repo {path}"
+                       f"created private repo {url}; continuing")
+        return f"created repo {url}"
 
     # groomed -> implemented: author writes code in an isolated worktree on a fresh branch.
     # A ticket with no repo_path first passes the human-gated repo-creation step below.
@@ -70,27 +72,21 @@ class CodingHandler(base.Handler):
                          f"No repo set for this ticket. Create new private GitHub repo '{name}'?",
                          {"repo_name": name}, resume_stage="creating_repo")
             return "new repo gated"
-        if not ctx.cfg.FAKE:
-            # repo_path may be a bare remote URL (a human pointed the ticket at an
-            # existing repo directly, bypassing the create_repo gate above, which only
-            # fires when repo_path is empty) — every git_ops call after this assumes a
-            # local clone, so resolve/clone it once before touching the worktree.
-            local, err = git_ops.ensure_local_clone(ctx, ticket)
-            if err:
-                base.fail(ctx, ticket, f"repo clone failed: {err}")
-                return "repo clone failed -> error"
-            if local != ticket["repo_path"]:
-                ctx.write("set_repo_path", ticket_id=ticket["id"], repo_path=local)
-                ticket = ctx.conn.execute("SELECT * FROM ticket WHERE id=?",
-                                          (ticket["id"],)).fetchone()
+        # Resolve repo_path to THIS machine's clone (cloning a URL on demand). The
+        # ticket's repo_path stays canonical/machine-independent — never rewritten to
+        # a local path, which would strand every other worker in the fleet.
+        repo, err = git_ops.local_repo(ctx, ticket)
+        if err:
+            base.fail(ctx, ticket, f"repo unavailable: {err}")
+            return "repo unavailable -> error"
         branch = hs.get("branch") or git_ops.new_branch(ticket["id"])
         hs["branch"] = branch
-        wt, err = git_ops.create_worktree(ctx, ticket, branch)
+        wt, err = git_ops.create_worktree(ctx, ticket, branch, repo)
         if err:
             base.fail(ctx, ticket, f"worktree creation failed: {err}")
             return "worktree creation failed -> error"
         hs["worktree_path"] = str(wt)
-        hs.setdefault("base_branch", git_ops.repo_head(ctx, ticket))
+        hs.setdefault("base_branch", git_ops.repo_head(ctx, repo))
         crit = (hs.get("groom") or {}).get("acceptance_criteria", [])
         clars = hs.get("clarifications", [])
         answered = "".join(f"\n  Q: {c['q']}\n  A: {c['a']}" for c in clars)
