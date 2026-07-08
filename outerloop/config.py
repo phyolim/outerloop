@@ -92,10 +92,37 @@ PIN_OFFLINE_PARK_HOURS = 24 # park an active ticket pinned to a worker unseen th
 # Hub-owned once set (never re-clobbered) — edit live on the Fleet page.
 DEFAULT_CAPS = ["dev", "repos:*", "heavy"]
 
-# Absolute binary paths (cron's env is minimal). Fall back to PATH lookup.
-CLAUDE_BIN = os.environ.get("OUTERLOOP_CLAUDE_BIN") or shutil.which("claude") or "claude"
-GH_BIN = os.environ.get("OUTERLOOP_GH_BIN") or shutil.which("gh") or "gh"
-GIT_BIN = os.environ.get("OUTERLOOP_GIT_BIN") or shutil.which("git") or "git"
+# Claude Code self-installs to a per-user ~/.local/bin, added to PATH by an interactive
+# shell rc — launchd (cron, brew services, a bare `.pkg`-less `outerloop service`) never
+# sources that rc, so `which` alone finds nothing there. Mirrors the fallback list
+# deploy/mac/scripts/preflight.sh already uses so the two checks agree.
+_CLAUDE_FALLBACKS = (
+    Path.home() / ".local/bin/claude",
+    Path.home() / ".claude/local/claude",
+    Path.home() / ".npm-global/bin/claude",
+    Path.home() / ".bun/bin/claude",
+    Path("/opt/homebrew/bin/claude"),
+    Path("/usr/local/bin/claude"),
+)
+
+
+def _find_bin(env_var, setting_key, name, fallbacks=()):
+    """Absolute binary path resolution: env var (cron/launchd-baked) > settings.json
+    (persisted by `doctor`, e.g. on a brew install with no baked env) > PATH > known
+    install locations `which` can't see under a stripped launchd PATH > bare name
+    (lets a clear FileNotFoundError surface instead of silently no-op-ing)."""
+    return (os.environ.get(env_var)
+            or local_setting(setting_key)
+            or shutil.which(name)
+            or next((str(p) for p in fallbacks if p.exists()), None)
+            or name)
+
+
+# Absolute binary paths (cron/launchd env is minimal). Fall back to PATH lookup, then
+# to settings.json / known install locations.
+CLAUDE_BIN = _find_bin("OUTERLOOP_CLAUDE_BIN", "claude_bin", "claude", _CLAUDE_FALLBACKS)
+GH_BIN = _find_bin("OUTERLOOP_GH_BIN", "gh_bin", "gh")
+GIT_BIN = _find_bin("OUTERLOOP_GIT_BIN", "git_bin", "git")
 
 # Per-role model tiers: cheap models for classify/estimate, capable ones for deep
 # coding. Tune the defaults here; override per-runner via env (see resolve_model).

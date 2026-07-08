@@ -60,15 +60,27 @@ def checks(run=_run, which=shutil.which):
     return out
 
 
-def run_doctor(run=_run):
+def run_doctor(run=_run, which=shutil.which):
     """Print ✓/✗ lines mirroring preflight.sh, a FAKE/real + role/hub_url footer, and a
-    summary. Exit non-zero if any real-mode blocker is present (so scripts can gate)."""
-    results = checks(run=run)
+    summary. Exit non-zero if any real-mode blocker is present (so scripts can gate).
+    `which` is injected (like checks()) so tests can stub binaries without touching PATH."""
+    results = checks(run=run, which=which)
     for c in results:
         mark = "✓" if c["ok"] else "✗"
         print(f"  {mark} {c['name']}: {c['detail']}")
         if not c["ok"] and c["fix"]:
             print(f"      ↳ {c['fix']}")
+
+    # A .pkg install bakes OUTERLOOP_CLAUDE_BIN into the launchd plist; a brew install
+    # (or any launchd job started with no baked env) has no such thing and `which`
+    # inside that stripped-PATH process finds nothing. Persist what THIS check just
+    # found (run with the real, unstubbed environment) to settings.json so config.py's
+    # _find_bin resolves it next time even with no env var set — see PROJECT.md's
+    # "mini not connecting"-style gotcha this mirrors.
+    claude = next((c["detail"] for c in results if c["name"] == "claude" and c["ok"]), None)
+    if claude and claude != config.local_setting("claude_bin"):
+        config.set_local("claude_bin", claude)
+        print(f"  (persisted claude_bin={claude} to settings.json for launchd/brew runs)")
 
     role = config.local_setting("role", "hub")
     hub_url = config.local_setting("hub_url", "")
