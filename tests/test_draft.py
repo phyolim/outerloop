@@ -76,5 +76,37 @@ assert row(r["id"])["draft"] == 0
 st, r = api.handle("POST", "/api/tickets", {"title": "api draft", "draft": True}, c)
 assert row(r["id"])["draft"] == 1
 
+# 7. /ui/edit works on a NON-draft too (title/body/project/repo_path — the human must
+#    be able to fix a bad repo URL and retry), but kind/type stay structural: the
+#    handler's sub_stage belongs to the current lifecycle, so those edits are ignored.
+st, r = post_json("/ui/edit", {"ticket_id": tid, "title": "renamed in-pipeline",
+                               "kind": "research", "body": "clarified",
+                               "project": "proj-x", "repo_path": "/tmp/some-repo"})
+assert st == 200, r
+t = row(tid)
+assert t["title"] == "renamed in-pipeline" and t["project"] == "proj-x"
+assert t["kind"] == "feature" and t["type"] == "coding", "kind/type must not change post-draft"
+assert t["repo_path"] == "/tmp/some-repo"
+
+# 8. While a worker holds a live lease the edit is refused (mid-stage, content in use).
+c.execute("INSERT INTO lease(ticket_id, owner, pid, boot_uuid, worker, epoch,"
+          " claim_sub_stage, claim_status, expires_at)"
+          " VALUES(?,?,?,?,?,?,?,?, datetime('now','+30 minutes'))",
+          (tid, "w1", 0, "w1", "w1", 1, None, "active"))
+c.commit()
+st, r = post_json("/ui/edit", {"ticket_id": tid, "title": "no"})
+assert st == 409 and "worker" in r["error"], r
+c.execute("DELETE FROM lease WHERE ticket_id=?", (tid,))
+c.commit()
+
+# 9. A done ticket can't be edited; an unknown id is a 404.
+c.execute("UPDATE ticket SET status='done' WHERE id=?", (tid,))
+c.commit()
+st, r = post_json("/ui/edit", {"ticket_id": tid, "title": "no"})
+assert st == 409, r
+st, r = post_json("/ui/edit", {"ticket_id": 99999, "title": "no"})
+assert st == 404, r
+
 srv.shutdown()
-print("ok: drafts invisible to triage until started; start-now paths skip the stage")
+print("ok: drafts invisible to triage until started; start-now paths skip the stage;"
+      " in-pipeline edits allowed except mid-lease/done")

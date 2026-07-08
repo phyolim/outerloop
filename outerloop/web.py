@@ -363,28 +363,48 @@ class Handler(BaseHTTPRequestHandler):
             return self._json_send({"ok": bool(ok)} if ok else {"error": "not a draft"},
                                    200 if ok else 409)
         if path == "/ui/edit":
-            # Edit a DRAFT's fields. Guarded to drafts only — once an item is in the
-            # pipeline a worker may be acting on its content mid-run.
+            # Edit a ticket's fields. A DRAFT gets a full edit (incl. kind/type — nothing
+            # has acted on it). A ticket already in the pipeline can still be edited
+            # (title/body/project/repo_path only — kind/type are structural: sub_stage
+            # belongs to the current handler's lifecycle), EXCEPT while a worker holds a
+            # live lease on it (mid-stage, acting on its content right now) or once done.
             tid = int(body["ticket_id"])
             title = (body.get("title") or "").strip()
             if not title:
                 return self._json_send({"error": "title required"}, 400)
-            kind = taxonomy.normalize_kind(body.get("kind"))
-            type_ = taxonomy.type_for(kind)
             repo = (body.get("repo_path") or "").strip() or None
+            proj = (body.get("project") or "").strip() or None
             with db.immediate(conn):
-                n = conn.execute(
-                    "UPDATE ticket SET title=?, body=?, kind=?, type=?, repo_path=?,"
-                    " project=?, updated_at=datetime('now')"
-                    " WHERE id=? AND status='inbox' AND draft=1",
-                    (title, (body.get("body") or "").strip(), kind, type_,
-                     repo if type_ == "coding" else None,
-                     (body.get("project") or "").strip() or None, tid)).rowcount
-                if n:
+                t = conn.execute("SELECT * FROM ticket WHERE id=?", (tid,)).fetchone()
+                if not t:
+                    return self._json_send({"error": "not found"}, 404)
+                if t["status"] == "inbox" and t["draft"]:
+                    kind = taxonomy.normalize_kind(body.get("kind"))
+                    type_ = taxonomy.type_for(kind)
+                    conn.execute(
+                        "UPDATE ticket SET title=?, body=?, kind=?, type=?, repo_path=?,"
+                        " project=?, updated_at=datetime('now') WHERE id=?",
+                        (title, (body.get("body") or "").strip(), kind, type_,
+                         repo if type_ == "coding" else None, proj, tid))
                     db.append_audit(conn, "human", "edited", "draft edited via UI",
                                     ticket_id=tid)
-            return self._json_send({"ok": True} if n else {"error": "only drafts can be edited"},
-                                   200 if n else 409)
+                    return self._json_send({"ok": True})
+                if t["status"] == "done":
+                    return self._json_send({"error": "a done ticket can't be edited"}, 409)
+                leased = conn.execute("SELECT 1 FROM lease WHERE ticket_id=?",
+                                      (tid,)).fetchone()
+                if leased:
+                    return self._json_send(
+                        {"error": "a worker is acting on this ticket right now — retry"
+                                  " in a moment"}, 409)
+                conn.execute(
+                    "UPDATE ticket SET title=?, body=?, repo_path=?, project=?,"
+                    " updated_at=datetime('now') WHERE id=?",
+                    (title, (body.get("body") or "").strip(),
+                     repo if t["type"] == "coding" else None, proj, tid))
+                db.append_audit(conn, "human", "edited",
+                                f"edited via UI (status {t['status']})", ticket_id=tid)
+            return self._json_send({"ok": True})
         # The reply/retry/dismiss handlers read the same keys the form posts do, so the
         # JSON body doubles as the form dict — same proven write path, JSON response.
         if path == "/ui/answer":

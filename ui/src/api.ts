@@ -61,7 +61,15 @@ async function postJSON<T>(url: string, payload: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  if (!res.ok) {
+    // Surface the server's {"error": "..."} body when present — e.g. /ui/edit's
+    // "a worker is acting on this ticket right now" beats a bare "409 Conflict".
+    const msg = await res
+      .json()
+      .then((b: { error?: string }) => b.error)
+      .catch(() => undefined)
+    throw new Error(msg || `${res.status} ${res.statusText}`)
+  }
   return res.json() as Promise<T>
 }
 
@@ -166,7 +174,7 @@ export function commentTicket(payload: { ticket_id: number; note: string }): Pro
   return postJSON('/ui/comment', payload)
 }
 
-export function editDraft(payload: {
+export function editTicket(payload: {
   ticket_id: number
   title: string
   kind: string

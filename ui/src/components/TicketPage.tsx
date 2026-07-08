@@ -5,7 +5,7 @@ import {
   closeTicket,
   commentTicket,
   dismissTicket,
-  editDraft,
+  editTicket,
   fetchTicket,
   queryKeys,
   retryTicket,
@@ -111,11 +111,13 @@ function Comment({ c, i }: { c: ThreadComment; i: number }) {
   )
 }
 
-function DraftEditor({
+function TicketEditor({
   ticket,
+  isDraft,
   onDone,
 }: {
   ticket: TicketThread['ticket']
+  isDraft: boolean
   onDone: () => void
 }) {
   const [f, setF] = useState({
@@ -126,18 +128,20 @@ function DraftEditor({
     repo_path: ticket.repo_path ?? '',
   })
   const save = useMutation({
-    mutationFn: () => editDraft({ ticket_id: ticket.id, ...f }),
+    mutationFn: () => editTicket({ ticket_id: ticket.id, ...f }),
     onSuccess: onDone,
   })
   return (
     <div className={`card-enter ${PANEL} mb-4 p-3.5`}>
-      <p className="microlabel mb-2">edit draft</p>
+      <p className="microlabel mb-2">{isDraft ? 'edit draft' : 'edit ticket'}</p>
       <input
         value={f.title}
         onChange={(e) => setF((v) => ({ ...v, title: e.target.value }))}
         className={`${INPUT} mb-3 w-full`}
       />
-      <div className="mb-3 flex flex-wrap gap-1.5">
+      {/* kind/type are structural once the ticket is in a handler's lifecycle —
+          the server rejects changing them post-draft, so don't offer it. */}
+      <div className={isDraft ? 'mb-3 flex flex-wrap gap-1.5' : 'hidden'}>
         {KINDS.map((k) => {
           const active = f.kind === k.kind
           const bright = kindColor(k.kind)
@@ -192,7 +196,11 @@ function DraftEditor({
         <button onClick={onDone} className={BTN.subtle}>
           Cancel
         </button>
-        {save.isError ? <span className="text-xs text-bad">Failed to save.</span> : null}
+        {save.isError ? (
+          <span className="text-xs text-bad">
+            {save.error instanceof Error ? save.error.message : 'Failed to save.'}
+          </span>
+        ) : null}
       </div>
     </div>
   )
@@ -446,23 +454,35 @@ export default function TicketPage({ id }: { id: number }) {
               {ticket.title}
             </h1>
             {ticket.status !== 'done' ? (
-              <button
-                onClick={() => {
-                  if (window.confirm('Close this ticket? Any running work is stopped and it leaves the queue.'))
-                    close.mutate()
-                }}
-                disabled={close.isPending}
-                className="shrink-0 text-xs text-tx3 underline-offset-2 transition-colors hover:text-bad hover:underline disabled:opacity-40"
-                title="No longer relevant — stop any running work and mark it done"
-              >
-                {close.isPending ? 'Closing…' : 'Close ticket'}
-              </button>
+              <div className="flex shrink-0 items-center gap-3">
+                {!isDraft ? (
+                  <button
+                    onClick={() => setEditing((e) => !e)}
+                    className="text-xs text-tx3 underline-offset-2 transition-colors hover:text-tx1 hover:underline"
+                    title="Edit title, description, project, or repo"
+                  >
+                    {editing ? 'Close editor' : 'Edit'}
+                  </button>
+                ) : null}
+                <button
+                  onClick={() => {
+                    if (window.confirm('Close this ticket? Any running work is stopped and it leaves the queue.'))
+                      close.mutate()
+                  }}
+                  disabled={close.isPending}
+                  className="text-xs text-tx3 underline-offset-2 transition-colors hover:text-bad hover:underline disabled:opacity-40"
+                  title="No longer relevant — stop any running work and mark it done"
+                >
+                  {close.isPending ? 'Closing…' : 'Close ticket'}
+                </button>
+              </div>
             ) : null}
           </header>
 
-          {editing && isDraft ? (
-            <DraftEditor
+          {editing ? (
+            <TicketEditor
               ticket={ticket}
+              isDraft={isDraft}
               onDone={() => {
                 setEditing(false)
                 invalidate()
