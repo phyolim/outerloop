@@ -77,7 +77,7 @@ TICKET_BUDGET_TOKENS = 1_000_000 # cumulative per-ticket ceiling -> failed
 AGENT_TIMEOUT_SEC = 900     # subprocess wall-clock wall for a headless claude run
 # Cheap classify/estimate roles run inline on the hub scheduler thread — a hung call
 # must not stall decision resumes for the full 15-minute wall.
-AGENT_TIMEOUT_BY_ROLE = {"triage": 60, "scorer": 60, "shipper": 300}
+AGENT_TIMEOUT_BY_ROLE = {"triage": 60, "scorer": 60, "shipper": 300, "warmup": 180}
 
 # Fleet (hub-and-spoke) timings.
 WORKER_OFFLINE_SEC = 120    # fleet view marks a worker offline after this heartbeat gap
@@ -146,6 +146,7 @@ ROLE_MODEL_DEFAULTS = {
     "ops": "sonnet",        # draft an external action
     "author": "opus",       # write the code — the deep-work role
     "fixer": "opus",        # address review findings in code
+    "warmup": "haiku",      # one-time permission warm-up — echo + write a file
 }
 DEFAULT_MODEL_TIER = "sonnet"
 

@@ -12,7 +12,7 @@ import tarfile
 import time
 import uuid
 
-from . import __version__, client, config
+from . import __version__, client, config, warmup
 from .context import RemoteCtx, StaleEpoch
 from .handlers import get_handler
 
@@ -110,6 +110,9 @@ def run_worker(base=None, self_update=True):
                 # launchd plist KeepAlive={SuccessfulExit:false}: exit 0 would leave us
                 # STOPPED; non-zero makes launchd restart us on the freshly-extracted code.
                 raise SystemExit(1)
+            # After apply_hub_cfg (FAKE is now the fleet's truth): first real-mode
+            # start front-loads the macOS permission dialogs a ticket would trigger.
+            warmup.maybe_warmup()
             if hb.get("status") not in (None, "online"):   # paused/draining => idle
                 time.sleep(poll)
                 continue

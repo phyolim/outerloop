@@ -118,12 +118,22 @@ def main():
         run_doctor()
         print("\nstart it:  brew services restart outerloop   (or: outerloop service)")
         print("this Mac then runs the hub and also does work itself.")
+    elif cmd == "warmup":
+        # Manual re-run; ignores the done-flag. NOTE: macOS attaches permission
+        # grants to the responsible process — dialogs answered here attach to your
+        # terminal, so the worker daemon ALSO warms itself up on first real start.
+        from . import __version__, warmup
+        if warmup.run_warmup():
+            config.set_local("warmed_up", __version__)
+            print("warmup: complete")
+        else:
+            sys.exit("warmup: incomplete (see errors above)")
     elif cmd == "local":
         key, val = _arg(2, "key: "), _arg(3, "value: ")
         config.set_local(key, val)
         print(f"{key} = {val}  (machine-local; settings.json)")
     else:
-        print("usage: python3 -m outerloop {version|init|serve|tick|hub|worker|service|setup-hub|setup-both|screener|doctor|status|auth|token|config|local}")
+        print("usage: python3 -m outerloop {version|init|serve|tick|hub|worker|service|setup-hub|setup-both|screener|doctor|warmup|status|auth|token|config|local}")
         print("  version                  print the installed version")
         print("  init                     create/upgrade the SQLite db")
         print("  serve [port]             single-machine web UI (default :8765)")
@@ -135,6 +145,7 @@ def main():
         print("  setup-both [password]    like setup-hub, but this Mac is ALSO a worker (hub + co-located worker)")
         print("  screener                 market producer: files analysis tickets (OUTERLOOP_* env)")
         print("  doctor                   check real-mode prereqs (git/gh/claude); nonzero exit if blocked")
+        print("  warmup                   exercise claude/git/gh once so macOS permission prompts fire now, not mid-ticket")
         print("  status                   show role/mode, daemon state, and (worker) hub reachability")
         print("  auth <on|off>            require per-worker bearer-token auth on the API")
         print("  token <worker> <tok>     provision a worker's bearer token")
