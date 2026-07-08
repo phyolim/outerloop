@@ -1066,6 +1066,10 @@ final class PopoverPane: NSViewController {
     var killSwitchOn = false
     var openWindow: (() -> Void)?
     var openSettings: (() -> Void)?
+    // NSPopover ignores preferredContentSize changes once shown; the async
+    // re-render (skeleton → live data) must push the new height to the popover
+    // itself or the grown content clips at the top (header + gear vanish).
+    weak var popover: NSPopover?
 
     // worker-side pairing (Pairing Flow steps 1–4)
     struct PairSession {
@@ -1091,6 +1095,19 @@ final class PopoverPane: NSViewController {
 
     override func loadView() {
         view = FlippedView(frame: NSRect(x: 0, y: 0, width: W, height: 220))
+    }
+    // Paint the design's #1c2029 over the stock popover material. The layer goes
+    // on the popover's frame view (contentView.superview) so the arrow and
+    // rounded chrome are tinted too, not just the content rect.
+    private let popoverBG = NSView()
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        guard popoverBG.superview == nil, let frame = view.window?.contentView?.superview else { return }
+        popoverBG.wantsLayer = true
+        popoverBG.layer?.backgroundColor = C.popover.cgColor
+        popoverBG.frame = frame.bounds
+        popoverBG.autoresizingMask = [.width, .height]
+        frame.addSubview(popoverBG, positioned: .below, relativeTo: frame.subviews.first)
     }
     override func viewWillAppear() {
         super.viewWillAppear()
@@ -1293,6 +1310,7 @@ final class PopoverPane: NSViewController {
 
         view.setFrameSize(NSSize(width: W, height: y))
         preferredContentSize = NSSize(width: W, height: y)
+        popover?.contentSize = NSSize(width: W, height: y)
     }
 
     func addHairline(_ y: CGFloat) {
@@ -1476,6 +1494,7 @@ final class PopoverPane: NSViewController {
 
         view.setFrameSize(NSSize(width: W, height: y))
         preferredContentSize = NSSize(width: W, height: y)
+        popover?.contentSize = NSSize(width: W, height: y)
     }
 
     @objc func joinHub(_ sender: NSButton) {
@@ -1622,6 +1641,7 @@ final class Controller: NSObject, NSWindowDelegate {
         popover.behavior = .transient
         popover.appearance = NSAppearance(named: .darkAqua)
         popover.contentViewController = popoverPane
+        popoverPane.popover = popover
         popoverPane.openWindow = { [weak self] in
             self?.popover.performClose(nil)
             self?.showWindow()
