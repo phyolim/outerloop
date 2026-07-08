@@ -262,7 +262,7 @@ def merge_pr(ctx, ticket, hs):
     return True
 
 
-def _detach_and_remove(cfg, path, branch=None):
+def retire_worktree(cfg, path, branch=None):
     """Fully retire one worktree: detach its registration from the parent clone,
     delete its throwaway branch, prune, then remove the tree. Best-effort at every
     step — the clone may live on another worker, or the dir may not be a git
@@ -294,33 +294,54 @@ def cleanup_worktree(ctx, ticket, hs):
     if ctx.cfg.FAKE or not ticket["repo_path"]:
         shutil.rmtree(path, ignore_errors=True)
         return
-    _detach_and_remove(ctx.cfg, path, hs.get("branch"))
+    retire_worktree(ctx.cfg, path, hs.get("branch"))
 
 
-def reap_worktrees(ctx):
-    """Retire worktrees (dir + clone registration + throwaway branch) whose ticket is
-    no longer resumable (must-fix #7). Resumable = active/blocked, or parked/failed
-    WITH a sub_stage: pause-Resume and failed-Retry both re-enter the same stage and
-    need the workspace, so it survives until the ticket is resumed, retried to
-    completion, dismissed, or closed — all of which land in a reapable state."""
-    conn = ctx.conn
+def local_ticket_dirs():
+    """{ticket_id: [dirs]} for this machine's WORKTREES_DIR. Shared by the hub-side
+    reaper and the worker's remote sweep so both see dirs the same way."""
+    dirs = {}
     for d in config.WORKTREES_DIR.glob("ticket-*"):
         try:
-            tid = int(d.name.split("-")[1])
+            dirs.setdefault(int(d.name.split("-")[1]), []).append(d)
         except (IndexError, ValueError):
             continue
-        row = conn.execute("SELECT status, sub_stage, handler_state FROM ticket WHERE id=?",
+    return dirs
+
+
+def unresumable(conn, ticket_ids):
+    """Subset of ticket_ids whose workspace is safe to retire: not active/blocked, and
+    not parked/failed WITH a sub_stage (pause-Resume and failed-Retry re-enter that
+    stage in place and need the tree). The single liveness predicate — used by the
+    local reaper and by /api/reap_check for remote workers' sweeps."""
+    out = []
+    for tid in ticket_ids:
+        row = conn.execute("SELECT status, sub_stage FROM ticket WHERE id=?",
                            (tid,)).fetchone()
         if row and (row["status"] in ("active", "blocked")
                     or (row["status"] in ("parked", "failed") and row["sub_stage"])):
             continue
+        out.append(tid)
+    return out
+
+
+def reap_worktrees(ctx):
+    """Retire worktrees (dir + clone registration + throwaway branch) whose ticket is
+    no longer resumable (must-fix #7). Runs on the box whose disk holds the trees: the
+    tick (cron mode) and the hub scheduler (fleet mode, covers the combined box);
+    remote workers sweep their own disk through /api/reap_check."""
+    conn = ctx.conn
+    dirs = local_ticket_dirs()
+    for tid in unresumable(conn, sorted(dirs)):
+        row = conn.execute("SELECT handler_state FROM ticket WHERE id=?", (tid,)).fetchone()
         # The branch name is machine-independent (same on every clone); prefer the
-        # ticket's record, else _detach_and_remove derives it from the tree's HEAD.
+        # ticket's record, else retire_worktree derives it from the tree's HEAD.
         branch = db.hstate(row).get("branch") if row else None
-        _detach_and_remove(ctx.cfg, d, branch)
-        # ticket_id only when the row exists: audit.ticket_id is FK-constrained, and a
-        # dir with no ticket row would otherwise crash the tick top-half here.
-        db.append_audit(conn, "recovery", "worktree_reaped",
-                        f"removed orphan worktree {d.name}"
-                        + (f" and branch {branch}" if branch else ""),
-                        ticket_id=tid if row else None, tick_id=ctx.tick_id)
+        for d in dirs[tid]:
+            retire_worktree(ctx.cfg, d, branch)
+            # ticket_id only when the row exists: audit.ticket_id is FK-constrained, and
+            # a dir with no ticket row would otherwise crash the tick top-half here.
+            db.append_audit(conn, "recovery", "worktree_reaped",
+                            f"removed orphan worktree {d.name}"
+                            + (f" and branch {branch}" if branch else ""),
+                            ticket_id=tid if row else None, tick_id=ctx.tick_id)

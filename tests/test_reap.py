@@ -63,6 +63,13 @@ print("OK: failed mid-flight ticket keeps its workspace")
 assert not wt99.exists(), "orphan worktree dir (no ticket row) must be reaped"
 print("OK: orphan dir reaped")
 
+# /api/reap_check serves the SAME predicate to remote workers: done + missing ids are
+# reapable, failed-with-sub_stage is not.
+from outerloop import api
+status, resp = api.handle("POST", "/api/reap_check", {"ticket_ids": [1, 2, 99]}, conn)
+assert status == 200 and resp["reap"] == [1, 99], (status, resp)
+print("OK: /api/reap_check returns reapable ids with the same predicate")
+
 # Dismissing the failure (failed -> done, what web _dismiss does) makes it reapable.
 conn.execute("UPDATE ticket SET status='done' WHERE id=2")
 git_ops.reap_worktrees(Ctx(conn, config, "tick-test"))
