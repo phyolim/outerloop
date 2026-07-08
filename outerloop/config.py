@@ -85,6 +85,7 @@ AGENT_TIMEOUT_BY_ROLE = {"triage": 60, "scorer": 60, "shipper": 300, "warmup": 1
 WORKER_OFFLINE_SEC = 120    # fleet view marks a worker offline after this heartbeat gap
 SCHED_INTERVAL_SEC = 3      # hub scheduler cadence (DB-only top-half)
 WORKER_POLL_SEC = 2         # worker poll interval when idle
+WORKER_REAP_SEC = 600       # how often a remote worker sweeps its worktrees via /api/reap_check
 FLEET_BUDGET_TOKENS = 5_000_000  # hub-wide token ceiling across ALL workers in the window
 FLEET_SPEND_WINDOW_HOURS = 24
 PIN_OFFLINE_PARK_HOURS = 24 # park an active ticket pinned to a worker unseen this long
