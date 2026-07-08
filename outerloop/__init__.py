@@ -2,4 +2,4 @@
 no VPN, no cloud. File tickets; everything irreversible waits for your
 approval."""
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
