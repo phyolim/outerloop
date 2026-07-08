@@ -341,15 +341,26 @@ func setWorkerEnv(_ updates: [String: String]) -> Bool {
     return (try? out.write(to: URL(fileURLWithPath: workerPlist))) != nil
 }
 
+// Blank the worker token wherever it lives (the inverse of the pairing writes),
+// so isUnpairedWorker flips true and the popover offers pairing again.
+func clearWorkerToken() {
+    if workerEnv()["OUTERLOOP_WORKER_TOKEN"] != nil { _ = setWorkerEnv(["OUTERLOOP_WORKER_TOKEN": ""]) }
+    writeSettings(["token": ""])
+}
+
 // --- hub JSON API (bearer = this machine's worker token) --------------------
-func apiGET(_ path: String, _ done: @escaping ([String: Any]?) -> Void) {
-    guard let url = URL(string: hubBase() + path) else { done(nil); return }
+func apiGET(_ path: String, status statusDone: @escaping ([String: Any]?, Int) -> Void) {
+    guard let url = URL(string: hubBase() + path) else { statusDone(nil, 0); return }
     var req = URLRequest(url: url); req.timeoutInterval = 5
     let tok = myToken(); if !tok.isEmpty { req.setValue("Bearer \(tok)", forHTTPHeaderField: "Authorization") }
-    URLSession.shared.dataTask(with: req) { data, _, _ in
+    URLSession.shared.dataTask(with: req) { data, resp, _ in
         let j = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any]
-        DispatchQueue.main.async { done(j) }
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        DispatchQueue.main.async { statusDone(j, code) }
     }.resume()
+}
+func apiGET(_ path: String, _ done: @escaping ([String: Any]?) -> Void) {
+    apiGET(path, status: { j, _ in done(j) })
 }
 func apiPOST(_ path: String, body: [String: Any] = [:], _ done: @escaping (Bool) -> Void) {
     guard let url = URL(string: hubBase() + path) else { done(false); return }
@@ -1089,6 +1100,7 @@ final class PopoverPane: NSViewController {
         var isDone: Bool { if case .done = self { return true }; return false }
     }
     var pairPhase: PairPhase = .idle
+    var pairNote: String?   // why we're (re-)pairing, e.g. token revoked by the hub
     let discovery = HubDiscovery()
     var pairPoll: Timer?
     var pairTick: Timer?
@@ -1134,11 +1146,26 @@ final class PopoverPane: NSViewController {
     }
 
     func refresh() {
-        apiGET("/api/fleet") { fleet in
+        apiGET("/api/fleet", status: { fleet, code in
+            // A 401 while we hold a token means the hub deleted this worker:
+            // drop the dead token and fall into the existing pairing flow.
+            if code == 401, role == "worker", !myToken().isEmpty {
+                self.tokenRevoked()
+                return
+            }
             apiGET("/api/decisions") { decisions in
                 self.render(fleet: fleet, decisions: decisions)
             }
-        }
+        })
+    }
+
+    func tokenRevoked() {
+        clearWorkerToken()
+        pairNote = "hub no longer recognizes this worker — pair again"
+        pairPhase = .idle
+        discovery.onChange = { [weak self] in self?.renderPairing() }
+        discovery.start()
+        renderPairing()
     }
 
     func render(fleet: [String: Any]?, decisions: [String: Any]?) {
@@ -1396,6 +1423,11 @@ final class PopoverPane: NSViewController {
             let h = microlabel("pair this mac", C.warn)
             h.frame = NSRect(x: inset, y: y, width: 200, height: 14); view.addSubview(h)
             y += 21
+            if let n = pairNote {
+                let w = label(n, monoFont(11), C.warn)
+                w.frame = NSRect(x: inset, y: y, width: W - 2 * inset, height: 14); view.addSubview(w)
+                y += 20
+            }
             if discovery.hubs.isEmpty {
                 let s = label("searching for hubs on this network…", monoFont(11), C.tx3)
                 s.frame = NSRect(x: inset, y: y, width: W - 2 * inset, height: 14); view.addSubview(s)
