@@ -240,6 +240,23 @@ def pr_state(ctx, ticket, hs):
         return "open"
 
 
+def pr_mergeable(ctx, ticket, hs):
+    """'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN'. GitHub computes mergeability async,
+    so UNKNOWN is normal right after a push — callers must treat it as 'try and see',
+    never as a conflict."""
+    if ctx.cfg.FAKE or not ticket["repo_path"]:
+        return "MERGEABLE"
+    slug, err = gh_slug(ctx, ticket)
+    if err:
+        return "UNKNOWN"
+    _, out, _ = _run(ctx.cfg, [ctx.cfg.GH_BIN, "pr", "view", str(hs["pr_number"]),
+                     "-R", slug, "--json", "mergeable"])
+    try:
+        return json.loads(out).get("mergeable") or "UNKNOWN"
+    except (json.JSONDecodeError, TypeError):
+        return "UNKNOWN"
+
+
 def merge_pr(ctx, ticket, hs):
     """THE gated action — the only path to main, run by the orchestrator strictly
     after human approval (never by an agent)."""
