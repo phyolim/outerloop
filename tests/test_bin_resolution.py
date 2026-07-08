@@ -38,6 +38,14 @@ found = config._find_bin("OUTERLOOP_NOPE_2", "claude_bin", "nope-binary-xyz", (f
 assert found == "/env/claude", f"env var should win over settings.json, got {found!r}"
 del os.environ["OUTERLOOP_NOPE_2"]
 
+# --- gh and git get fallback lists too (a brew gh in /opt/homebrew/bin is invisible
+# to `which` under launchd's default PATH — the exact failure ticket #8 hit) ---
+assert config._GH_FALLBACKS and config._GIT_FALLBACKS
+for p in config._GH_FALLBACKS:
+    assert str(p).endswith("/gh"), p
+for p in config._GIT_FALLBACKS:
+    assert str(p).endswith("/git"), p
+
 print("OK config._find_bin precedence: env > settings.json > PATH > fallback > bare name")
 
 # --- doctor persists a discovered claude path to settings.json (brew/launchd-safe) ---

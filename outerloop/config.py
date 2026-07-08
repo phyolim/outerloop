@@ -104,6 +104,11 @@ _CLAUDE_FALLBACKS = (
     Path("/opt/homebrew/bin/claude"),
     Path("/usr/local/bin/claude"),
 )
+# gh/git need the same treatment: a brew-installed gh lives in /opt/homebrew/bin,
+# which launchd's default PATH (/usr/bin:/bin:/usr/sbin:/sbin) does not include.
+_GH_FALLBACKS = (Path("/opt/homebrew/bin/gh"), Path("/usr/local/bin/gh"))
+_GIT_FALLBACKS = (Path("/usr/bin/git"), Path("/opt/homebrew/bin/git"),
+                  Path("/usr/local/bin/git"))
 
 
 def _find_bin(env_var, setting_key, name, fallbacks=()):
@@ -121,8 +126,8 @@ def _find_bin(env_var, setting_key, name, fallbacks=()):
 # Absolute binary paths (cron/launchd env is minimal). Fall back to PATH lookup, then
 # to settings.json / known install locations.
 CLAUDE_BIN = _find_bin("OUTERLOOP_CLAUDE_BIN", "claude_bin", "claude", _CLAUDE_FALLBACKS)
-GH_BIN = _find_bin("OUTERLOOP_GH_BIN", "gh_bin", "gh")
-GIT_BIN = _find_bin("OUTERLOOP_GIT_BIN", "git_bin", "git")
+GH_BIN = _find_bin("OUTERLOOP_GH_BIN", "gh_bin", "gh", _GH_FALLBACKS)
+GIT_BIN = _find_bin("OUTERLOOP_GIT_BIN", "git_bin", "git", _GIT_FALLBACKS)
 
 # Per-role model tiers: cheap models for classify/estimate, capable ones for deep
 # coding. Tune the defaults here; override per-runner via env (see resolve_model).

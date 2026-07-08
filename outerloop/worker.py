@@ -18,15 +18,18 @@ from .handlers import get_handler
 
 
 def _run_one(base, token, worker, t, epoch):
+    """Run one stage. Returns True if the stage errored — the caller backs off before
+    the next claim so a deterministically-failing stage can't burn through the ticket's
+    whole MAX_ATTEMPTS stall budget in under a second of claim/error/re-claim."""
     ctx = RemoteCtx(base, token, t["id"], epoch, tick_id=f"{worker}-{uuid.uuid4().hex[:6]}")
     handler = get_handler(t["type"])
-    outcome = "advanced"
+    outcome, errored = "advanced", False
     try:
         handler.advance(ctx, t)
     except StaleEpoch:
         outcome = "stale (lease reclaimed mid-stage)"
     except Exception as e:  # noqa: BLE001 — one ticket must not kill the worker
-        outcome = f"error: {e}"
+        outcome, errored = f"error: {e}", True
         try:
             ctx.write("append_audit", actor="worker", action="error", reason=str(e)[:200])
         except Exception:
@@ -37,6 +40,7 @@ def _run_one(base, token, worker, t, epoch):
         except Exception:
             pass
     print(f"[{worker}] ticket {t['id']} ({t['type']}/{t.get('sub_stage')}): {outcome}")
+    return errored
 
 
 def _extract_update(data, dest_root):
@@ -114,7 +118,8 @@ def run_worker(base=None, self_update=True):
             if not t:
                 time.sleep(poll)
                 continue
-            _run_one(base, token, worker, t, claimed["epoch"])
+            if _run_one(base, token, worker, t, claimed["epoch"]):
+                time.sleep(poll * 2)  # errored stage: back off before re-claiming
         except client.APIError as e:
             print(f"[{worker}] hub error {e.code}; backing off")
             time.sleep(poll * 2)
