@@ -689,6 +689,12 @@ export default function TicketPage({ id }: { id: number }) {
                   <span className="text-[#c6ccd8]">{ticket.sub_stage}</span>
                 </span>
               ) : null}
+              {ticket.worker ? (
+                <span className="flex justify-between">
+                  <span className="text-tx3">worker</span>
+                  <span className="text-acc">▸ {ticket.worker}</span>
+                </span>
+              ) : null}
               <span className="flex justify-between">
                 <span className="text-tx3">kind</span>
                 <span style={{ color: kc }}>{ticket.kind}</span>

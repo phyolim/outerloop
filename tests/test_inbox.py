@@ -87,6 +87,13 @@ assert co == {"backlog": 2, "active": 2, "blocked": 1, "onhold": 1, "failed": 1,
 # blocked ticket carries its decision-kind wait hint (None here — no decision row), draft flag present
 draft = next(t for t in tk["tickets"] if t["id"] == 1)
 assert draft["draft"] is True and draft["status"] == "inbox"
+# worker: a leased active ticket names its machine; unleased or non-active carry none
+bycard = {t["id"]: t for t in tk["tickets"]}
+assert bycard[3]["worker"] == "hub", bycard[3]
+assert bycard[9]["worker"] is None and bycard[6]["worker"] is None, (bycard[9], bycard[6])
+# ticket.json mirrors it for the detail page's meta rail
+assert h._ticket_json(c, 3)["ticket"]["worker"] == "hub"
+assert h._ticket_json(c, 6)["ticket"]["worker"] is None
 
 # --- project filter narrows both counts and rows ---
 c.execute("UPDATE ticket SET project='homelab' WHERE id IN (2,5)")

@@ -12,6 +12,7 @@ export interface Card {
   score: number | null
   breakdown: string
   project: string | null
+  worker: string | null // machine working on it (active tickets only)
   draft: boolean
   stale_days: number | null
   wait?: string | null
@@ -132,6 +133,7 @@ export interface TicketThread {
     sub_stage: string | null
     project: string | null
     repo_path: string | null
+    worker: string | null // machine working on it (active tickets only)
     draft: boolean
   }
   factors: Factors

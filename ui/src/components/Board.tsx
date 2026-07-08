@@ -52,6 +52,12 @@ function ListRow({ c }: { c: Card }) {
       <span className="mono w-[34px] shrink-0 text-right text-[10px] text-tx3">
         {c.score != null ? `▲${Math.round(c.score)}` : ''}
       </span>
+      <span
+        className="mono hidden w-[64px] shrink-0 truncate text-[10px] text-acc sm:inline"
+        title={c.worker ? `running on ${c.worker}` : undefined}
+      >
+        {c.worker ? `▸ ${c.worker}` : ''}
+      </span>
       <span className="mono hidden w-[72px] shrink-0 truncate text-[10px] text-proj sm:inline">
         {c.project ?? ''}
       </span>

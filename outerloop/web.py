@@ -517,10 +517,14 @@ class Handler(BaseHTTPRequestHandler):
     def _card(self, t, wait=None):
         kind = taxonomy.normalize_kind(t["kind"], t["type"])
         m = taxonomy.meta(kind)
+        # Which machine is on it — live lease first, claim assignment as fallback
+        # (same rule as _inbox_json). Only meaningful while the ticket is active.
+        lw = t["lworker"] if "lworker" in t.keys() else None
         card = {"id": t["id"], "title": t["title"], "kind": kind,
                 "kind_label": m["label"], "kind_color": m["color"], "type": t["type"],
                 "status": t["status"], "sub_stage": t["sub_stage"], "score": t["score"],
                 "breakdown": scoring.breakdown(t), "project": t["project"],
+                "worker": (lw or t["assigned_worker"]) if t["status"] == "active" else None,
                 "draft": bool(t["draft"]), "stale_days": self._stale_days(t)}
         if wait is not None:
             card["wait"] = wait
@@ -666,8 +670,9 @@ class Handler(BaseHTTPRequestHandler):
         pf = " AND t.project=?" if project else ""
         pa = (project,) if project else ()
         live = conn.execute(
-            "SELECT t.*, d.kind AS dkind FROM ticket t"
+            "SELECT t.*, d.kind AS dkind, l.worker AS lworker FROM ticket t"
             " LEFT JOIN decision d ON d.id=t.blocked_by_decision_id"
+            " LEFT JOIN lease l ON l.ticket_id=t.id"
             " WHERE t.status IN ('inbox','active','blocked','parked','failed')" + pf
             + " ORDER BY t.score IS NULL, t.score DESC, t.updated_at DESC", pa).fetchall()
         dpf = " AND project=?" if project else ""
@@ -736,13 +741,16 @@ class Handler(BaseHTTPRequestHandler):
                   for e in reversed(conn.execute(
                       "SELECT role, kind, body, created_at FROM agent_event"
                       " WHERE ticket_id=? ORDER BY id DESC LIMIT 50", (tid,)).fetchall())]
+        lease = conn.execute("SELECT worker FROM lease WHERE ticket_id=?", (tid,)).fetchone()
+        worker = ((lease["worker"] if lease else None) or t["assigned_worker"]) \
+            if t["status"] == "active" else None
         return {
             "ticket": {"id": t["id"], "title": t["title"], "body": t["body"],
                        "kind": taxonomy.normalize_kind(t["kind"], t["type"]),
                        "kind_label": m["label"], "kind_color": m["color"],
                        "status": t["status"], "sub_stage": t["sub_stage"],
                        "project": t["project"], "repo_path": t["repo_path"],
-                       "draft": bool(t["draft"])},
+                       "worker": worker, "draft": bool(t["draft"])},
             "factors": {k: t[k] for k in ("impact", "urgency", "confidence", "effort")},
             "score": t["score"], "breakdown": scoring.breakdown(t),
             "comments": comments, "pending": pending, "failed": t["status"] == "failed",

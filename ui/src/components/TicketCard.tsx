@@ -62,6 +62,14 @@ export default function TicketCard({ card, index = 0 }: { card: Card; index?: nu
             stuck {card.stale_days}d
           </span>
         ) : null}
+        {card.worker ? (
+          <span
+            className="mono ml-auto truncate text-[10px] text-acc"
+            title={`running on ${card.worker}`}
+          >
+            ▸ {card.worker}
+          </span>
+        ) : null}
       </div>
       <LifecycleMeter t={card} />
     </a>

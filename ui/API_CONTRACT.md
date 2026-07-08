@@ -44,6 +44,7 @@ All responses are JSON. Timestamps are SQLite `datetime('now')` strings (UTC,
   "score": 18.0,                 // may be null -> render "unscored"
   "breakdown": "(I3 x U3 x C4)/E2 = 18",  // human score string, may be "" 
   "project": "orchestrator",     // may be null
+  "worker": "mbp",               // machine working on it (lease holder, or claim assignment); null unless active
   "draft": false,                // true only on inbox cards not yet submitted (render "draft" + Start)
   "wait": "clarification"        // ONLY on blocked cards: pending decision kind; else absent/null
 }
