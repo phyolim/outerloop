@@ -37,7 +37,7 @@ class CodingHandler(base.Handler):
 
     # seed -> groomed: expand the idea into tasks + acceptance criteria (read-only, auto).
     def _stage_seed(self, ctx, ticket, hs):
-        res = agent.run_agent(ctx, "groomer", ticket_id=ticket["id"],
+        res = agent.run_agent(ctx, "groomer", ticket_id=ticket["id"], ticket=ticket,
                               prompt=f"Expand into tasks + acceptance criteria.\n"
                                      f"{_kind_hint(ticket)}\n"
                                      f"TITLE: {ticket['title']}\nBODY: {ticket['body']}")
@@ -108,7 +108,7 @@ class CodingHandler(base.Handler):
         # dev server. ponytail: full shell shares the user's git/gh creds — the durable
         # main-branch protection is GitHub-side (branch protection / required PRs),
         # not this prompt; the orchestrator's merge gate is the only sanctioned door.
-        res = agent.run_agent(ctx, "author", ticket_id=ticket["id"], cwd=cwd,
+        res = agent.run_agent(ctx, "author", ticket_id=ticket["id"], ticket=ticket, cwd=cwd,
                               worktree_path=wt, allowed_tools="Edit,Write,Bash",
                               prompt=f"{setup}Implement this on branch {branch}.\n"
                                      f"{_kind_hint(ticket)}\n"
@@ -179,7 +179,7 @@ class CodingHandler(base.Handler):
         diff = git_ops.branch_diff(ctx, ticket, hs)
         crit = (hs.get("groom") or {}).get("acceptance_criteria", [])
         res = agent.run_agent(
-            ctx, "reviewer", ticket_id=ticket["id"],
+            ctx, "reviewer", ticket_id=ticket["id"], ticket=ticket,
             prompt=f"Review this branch diff against the acceptance criteria. ROUND: {rounds_used}\n"
                    f"ACCEPTANCE: {crit}\nDIFF:\n{diff}")
         if not base.note_agent(ctx, ticket, hs, res):
@@ -207,7 +207,7 @@ class CodingHandler(base.Handler):
     # fixing -> reviewing: the fixer (may reuse author identity; only APPROVAL is forbidden).
     def _stage_fixing(self, ctx, ticket, hs):
         findings = hs.get("last_findings", [])
-        res = agent.run_agent(ctx, "fixer", ticket_id=ticket["id"],
+        res = agent.run_agent(ctx, "fixer", ticket_id=ticket["id"], ticket=ticket,
                               cwd=hs.get("worktree_path"),
                               worktree_path=hs.get("worktree_path"),
                               allowed_tools="Edit,Write,Bash",  # shell for iteration, same as author
@@ -243,7 +243,7 @@ class CodingHandler(base.Handler):
         hs["pending_action"] = {"kind": "pr_create", "branch": branch}
         base.save_hs(ctx, ticket, hs, "effect_pending", "about to open PR")
         res = agent.run_agent(
-            ctx, "shipper", ticket_id=ticket["id"], cwd=hs.get("worktree_path"),
+            ctx, "shipper", ticket_id=ticket["id"], ticket=ticket, cwd=hs.get("worktree_path"),
             worktree_path=hs.get("worktree_path"), allowed_tools="Bash",
             prompt=f"Ship the reviewed branch {branch} from this worktree:\n"
                    f"1. Push it: git push -u origin {branch}\n"

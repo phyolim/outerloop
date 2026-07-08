@@ -21,7 +21,7 @@ class KnowledgeHandler(base.Handler):
         return "failed"
 
     def _draft(self, ctx, ticket, hs):
-        res = agent.run_agent(ctx, "knowledge", ticket_id=ticket["id"],
+        res = agent.run_agent(ctx, "knowledge", ticket_id=ticket["id"], ticket=ticket,
                               prompt=f"Research and draft a deliverable.\n"
                                      f"TITLE: {ticket['title']}\nBODY: {ticket['body']}")
         if not base.note_agent(ctx, ticket, hs, res):
@@ -43,7 +43,7 @@ class KnowledgeHandler(base.Handler):
         return "drafted"
 
     def _review(self, ctx, ticket, hs):
-        res = agent.run_agent(ctx, "reviewer", ticket_id=ticket["id"],
+        res = agent.run_agent(ctx, "reviewer", ticket_id=ticket["id"], ticket=ticket,
                               prompt=f"Review this deliverable for quality.\n"
                                      f"{open(hs['artifact']).read()[:4000]}")
         if not base.note_agent(ctx, ticket, hs, res):

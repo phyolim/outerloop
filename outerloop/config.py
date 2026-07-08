@@ -16,6 +16,7 @@ HOME = Path(os.environ.get("OUTERLOOP_HOME", REPO_ROOT / "data")).resolve()
 DB_PATH = HOME / "inbox.db"
 SCHEMA_PATH = REPO_ROOT / "schema.sql"
 PROMPTS_DIR = REPO_ROOT / "prompts"
+AGENTS_DIR = HOME / "agents"        # persona roster (user config — survives upgrades)
 WORKTREES_DIR = HOME / "worktrees"
 REPOS_DIR = HOME / "repos"          # clones of repos this orchestrator created itself
 ARTIFACTS_DIR = HOME / "artifacts"
@@ -161,17 +162,21 @@ def _models_map():
     return out
 
 
-def resolve_model(role):
-    """Model id for an agent role. Hub-inherited routing wins (fleet behavior is
-    hub-owned; HUB_MODELS is set by apply_hub_cfg on workers, empty on the hub).
-    Local env applies on the hub itself or before the first heartbeat:
-       OUTERLOOP_MODEL_<ROLE>  >  OUTERLOOP_MODELS[role]  >  OUTERLOOP_MODEL (all roles)  >  role default.
+def resolve_model(role, persona_model=None):
+    """Model id for an agent role. A persona's model wins outright: the roster and
+    the role routing are both hub-owned operator intent, and the persona (role +
+    project) is the more specific of the two — also, the hub ships MODELS fully
+    resolved, so on a worker role routing can't be told apart from role defaults.
+    Below that, hub-inherited routing (HUB_MODELS, set by apply_hub_cfg on workers,
+    empty on the hub) then local env (the hub itself / before the first heartbeat):
+       persona model (prompts/agents frontmatter)  >  OUTERLOOP_MODEL_<ROLE>
+       >  OUTERLOOP_MODELS[role]  >  OUTERLOOP_MODEL (all roles)  >  role default.
     A value may be a tier alias ('haiku'/'sonnet'/'opus') or a full model id."""
     override = (HUB_MODELS.get(role.lower())
                 or os.environ.get(f"OUTERLOOP_MODEL_{role.upper()}")
                 or _models_map().get(role.lower())
                 or os.environ.get("OUTERLOOP_MODEL"))
-    tier_or_id = override or ROLE_MODEL_DEFAULTS.get(role, DEFAULT_MODEL_TIER)
+    tier_or_id = persona_model or override or ROLE_MODEL_DEFAULTS.get(role, DEFAULT_MODEL_TIER)
     return MODEL_TIERS.get(tier_or_id, tier_or_id)  # alias -> id, else pass a full id through
 
 
@@ -179,24 +184,31 @@ def resolve_model(role):
 # them from every heartbeat, so one Mac's stray OUTERLOOP_FAKE=1 can't run a fake
 # lifecycle inside a real fleet. Machine-local config (paths, binaries, identity)
 # is never inherited. HUB_MODELS wins over local model env once populated.
+# HUB_PERSONAS is None until a heartbeat delivers a roster (None = "no hub spoke
+# yet, use local files"; [] = "the hub says the roster is empty" — they differ).
 HUB_MODELS = {}
+HUB_PERSONAS = None
 
 
 def hub_cfg():
     """What the hub advertises in a heartbeat response (its own resolved values)."""
+    from . import personas  # late import: personas needs config's paths at module load
     return {"FAKE": FAKE, "ALLOW_MERGE_WITHOUT_CI": ALLOW_MERGE_WITHOUT_CI,
-            "MODELS": {r: resolve_model(r) for r in ROLE_MODEL_DEFAULTS}}
+            "MODELS": {r: resolve_model(r) for r in ROLE_MODEL_DEFAULTS},
+            "PERSONAS": personas.load_personas()}
 
 
 def apply_hub_cfg(cfg):
     """Worker side: overwrite fleet-behavior knobs with the hub's. No-op when the
     hub predates this (no 'cfg' in the heartbeat) — local env keeps applying."""
-    global FAKE, ALLOW_MERGE_WITHOUT_CI, HUB_MODELS
+    global FAKE, ALLOW_MERGE_WITHOUT_CI, HUB_MODELS, HUB_PERSONAS
     if not cfg:
         return
     FAKE = bool(cfg.get("FAKE", FAKE))
     ALLOW_MERGE_WITHOUT_CI = bool(cfg.get("ALLOW_MERGE_WITHOUT_CI", ALLOW_MERGE_WITHOUT_CI))
     HUB_MODELS = cfg.get("MODELS") or {}
+    if "PERSONAS" in cfg:  # an old hub omits the key — keep using local files
+        HUB_PERSONAS = cfg["PERSONAS"]
 
 
 # One uuid per process. Combined with a fresh heartbeat it is the real authority
@@ -219,5 +231,5 @@ SETTINGS_DEFAULTS = {
 
 
 def ensure_dirs():
-    for d in (HOME, WORKTREES_DIR, REPOS_DIR, ARTIFACTS_DIR, BACKUPS_DIR):
+    for d in (HOME, WORKTREES_DIR, REPOS_DIR, ARTIFACTS_DIR, BACKUPS_DIR, AGENTS_DIR):
         d.mkdir(parents=True, exist_ok=True)

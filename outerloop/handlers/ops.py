@@ -24,7 +24,7 @@ class OpsHandler(base.Handler):
     def _propose(self, ctx, ticket, hs):
         # Operator notes (e.g. a rework answer on the gate) steer the re-draft.
         notes = "".join(f"\nOPERATOR NOTE: {c['a']}" for c in hs.get("clarifications", []))
-        res = agent.run_agent(ctx, "ops", ticket_id=ticket["id"],
+        res = agent.run_agent(ctx, "ops", ticket_id=ticket["id"], ticket=ticket,
                               prompt=f"Draft the concrete action (do NOT send).\n"
                                      f"TITLE: {ticket['title']}\nBODY: {ticket['body']}"
                                      + notes)

@@ -13,6 +13,8 @@ import threading
 import time
 import uuid
 
+from . import personas
+
 
 def _fake(role, prompt):
     """Deterministic canned responses, one per role, enough to walk every stage."""
@@ -140,14 +142,15 @@ def _dispatch_event(env, on_event, state):
         state["result"] = env
 
 
-def _real(cfg, role, prompt, cwd, allowed_tools, session_id, on_event=lambda k, b: None):
+def _real(cfg, role, prompt, cwd, allowed_tools, session_id, model,
+          on_event=lambda k, b: None):
     """Shell headless claude, streaming events (--output-format stream-json) through
     on_event as they happen so the UI can show work in flight. Best-effort JSON parse
     of the result text. The hard per-run bound is a wall-clock deadline enforced on
     the line reader; accounting is in tokens."""
     argv = [cfg.CLAUDE_BIN, "-p", "--print", "--verbose",
             "--output-format", "stream-json",
-            "--model", cfg.resolve_model(role),
+            "--model", model,
             "--session-id", session_id,
             "--permission-mode", "acceptEdits"]
     if cwd:
@@ -211,13 +214,20 @@ def _real(cfg, role, prompt, cwd, allowed_tools, session_id, on_event=lambda k, 
             "exit_code": proc.returncode, "timed_out": False}
 
 
-def run_agent(ctx, role, prompt, *, ticket_id, cwd=None, allowed_tools=None,
+def run_agent(ctx, role, prompt, *, ticket_id, ticket=None, cwd=None, allowed_tools=None,
               json_schema=None, session_id=None, worktree_path=None):
     """Run one headless agent. Records an agent_run row + audit and returns
-    {session_id, data, tokens_in, tokens_out, exit_code, timed_out}."""
+    {session_id, data, tokens_in, tokens_out, exit_code, timed_out}.
+
+    `ticket` (row or dict) selects a persona from the roster (prompts/agents/) by
+    role + project; its body is prepended to the prompt so agent_run.prompt records
+    exactly what the agent was told to be, and its model choice applies."""
     cfg = ctx.cfg
     session_id = session_id or str(uuid.uuid4())  # claude requires a canonical dashed UUID
-    model = cfg.resolve_model(role)
+    persona = personas.resolve(role, ticket)
+    if persona:
+        prompt = personas.preamble(persona) + prompt
+    model = cfg.resolve_model(role, persona_model=persona.get("model") if persona else None)
 
     def emit(kind, body):
         # Live-feed rows are best-effort visibility: a hub blip must not kill a
@@ -235,7 +245,7 @@ def run_agent(ctx, role, prompt, *, ticket_id, cwd=None, allowed_tools=None,
                "exit_code": 0, "timed_out": False}
     else:
         res = _real(cfg, role, prompt + _schema_suffix(role), cwd, allowed_tools, session_id,
-                    on_event=emit)
+                    model, on_event=emit)
 
     tokens = res["tokens_in"] + res["tokens_out"]
     ctx.write("agent_run", session_id=session_id, ticket_id=ticket_id, role=role, prompt=prompt,
@@ -245,8 +255,10 @@ def run_agent(ctx, role, prompt, *, ticket_id, cwd=None, allowed_tools=None,
               tokens_in=res["tokens_in"], tokens_out=res["tokens_out"],
               actor=f"agent:{role}",
               reason=("timed out" if res["timed_out"] else "completed")
-                     + f" ({tokens:,} tok, {model})",
+                     + f" ({tokens:,} tok, {model})"
+                     + (f" as '{persona.get('name')}'" if persona else ""),
               detail={"role": role, "session_id": session_id, "model": model,
+                      "persona": persona.get("name") if persona else None,
                       "timed_out": res["timed_out"],
                       "tokens_in": res["tokens_in"], "tokens_out": res["tokens_out"]})
     res["session_id"] = session_id
