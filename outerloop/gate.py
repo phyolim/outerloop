@@ -5,6 +5,8 @@ ticket until a human answers in the UI. That makes the gate unbypassable."""
 
 import json
 
+from . import db
+
 # Hard-wired to ALWAYS queue, classifier-independent. These are the actions whose
 # blast radius we never let an unattended loop take on its own.
 ALWAYS_QUEUE = {"merge", "deploy", "review_exhausted", "irreversible_action",
@@ -26,6 +28,19 @@ def require(ctx, ticket, kind, question, context, resume_stage, pin=None):
     r = ctx.write("require", ticket_id=ticket["id"], kind=kind, question=question,
                   context=json.dumps(context), resume_stage=resume_stage, pin=pin)
     return r["decision_id"]
+
+
+def expire_orphan_permissions(conn):
+    """Permission asks (context._perm_ask) ride inside a live agent run — once the
+    ticket's lease is gone nobody is waiting on the answer. Void them so the Inbox
+    doesn't collect dead asks and a late 'Allow' click acts on nothing. Normally the
+    asking run expires its own (perm_expire); this sweeps runs that were killed."""
+    with db.immediate(conn):
+        conn.execute(
+            "UPDATE decision SET status='rejected', consumed=1, answered_at=datetime('now'),"
+            " answer_note='(expired — the agent run ended before this was answered)'"
+            " WHERE kind='permission' AND status='pending'"
+            " AND ticket_id NOT IN (SELECT ticket_id FROM lease)")
 
 
 def answered_decision(conn, ticket):

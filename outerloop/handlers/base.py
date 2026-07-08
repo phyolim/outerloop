@@ -59,7 +59,9 @@ def note_agent(ctx, ticket, hs, res):
     if res["timed_out"]:
         hs["consec_timeouts"] = hs.get("consec_timeouts", 0) + 1
         if hs["consec_timeouts"] >= ctx.cfg.MAX_CONSEC_TIMEOUTS:
-            fail(ctx, ticket, f"agent timed out {hs['consec_timeouts']}x in a row")
+            fail(ctx, ticket, f"agent timed out {hs['consec_timeouts']}x in a row"
+                 " — a macOS permission dialog may be waiting on the worker's screen;"
+                 " check the machine or re-run `outerloop warmup` there")
             return False
     else:
         hs["consec_timeouts"] = 0

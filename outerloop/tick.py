@@ -166,6 +166,7 @@ def run_tick():
     try:
         leasing.heartbeat(conn, tick_id)
         leasing.reclaim_expired(conn, tick_id)
+        gate.expire_orphan_permissions(conn)
         git_ops.reap_worktrees(ctx)
         triage.triage_new(ctx)
         scoring.score_unscored(ctx)

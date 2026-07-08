@@ -79,6 +79,10 @@ TIMEOUT_CHARGE_TOKENS = 200_000
 TICK_BUDGET_TOKENS = 500_000     # halt selection once a tick consumes this much
 TICKET_BUDGET_TOKENS = 1_000_000 # cumulative per-ticket ceiling -> failed
 AGENT_TIMEOUT_SEC = 900     # subprocess wall-clock wall for a headless claude run
+# How long a run's permission ask (permission_mcp) waits for a human Allow/Deny in the
+# ticket thread before denying. Must stay well under AGENT_TIMEOUT_SEC: the run's
+# wall-clock deadline keeps ticking while it waits.
+PERMISSION_WAIT_SEC = 180
 # Cheap classify/estimate roles run inline on the hub scheduler thread — a hung call
 # must not stall decision resumes for the full 15-minute wall.
 AGENT_TIMEOUT_BY_ROLE = {"triage": 60, "scorer": 60, "shipper": 300, "warmup": 180}

@@ -37,6 +37,12 @@ def handle(method, path, body, conn, auth_worker=None, intake_token=None):
     if method == "GET" and path.startswith("/api/ticket/"):
         row = conn.execute("SELECT * FROM ticket WHERE id=?", (int(path.rsplit("/", 1)[-1]),)).fetchone()
         return (200, _rowdict(row)) if row else (404, {"error": "no such ticket"})
+    if method == "GET" and path.startswith("/api/decision/"):
+        # Polled by permission_mcp while a live run waits on a human Allow/Deny.
+        row = conn.execute("SELECT id, ticket_id, kind, status, rework, answer_note"
+                           " FROM decision WHERE id=?",
+                           (int(path.rsplit("/", 1)[-1]),)).fetchone()
+        return (200, _rowdict(row)) if row else (404, {"error": "no such decision"})
     if method == "GET" and path == "/api/fleet":
         return 200, _fleet(conn)
     if method == "GET" and path == "/api/tasks":

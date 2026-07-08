@@ -9,9 +9,11 @@ import queue
 import re
 import signal
 import subprocess
+import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from . import personas
 
@@ -147,8 +149,28 @@ def _dispatch_event(env, on_event, state):
         state["result"] = env
 
 
+def _perm_args(cfg, perm):
+    """Point headless claude at the permission bridge (permission_mcp): a tool call
+    needing a permission becomes a ticket-thread decision instead of a silent
+    auto-deny. The bridge subprocess inherits everything it needs via env."""
+    env = {"OUTERLOOP_PERM_TICKET": str(perm["ticket_id"]),
+           "OUTERLOOP_PERM_EPOCH": str(perm["epoch"]),
+           "OUTERLOOP_PERM_WAIT": str(cfg.PERMISSION_WAIT_SEC),
+           "OUTERLOOP_HOME": str(cfg.HOME),
+           "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
+    if perm.get("hub"):
+        env["OUTERLOOP_PERM_HUB"] = perm["hub"]
+        if perm.get("token"):
+            env["OUTERLOOP_PERM_TOKEN"] = perm["token"]
+    mcp = {"mcpServers": {"outerloop": {"command": sys.executable,
+                                        "args": ["-m", "outerloop.permission_mcp"],
+                                        "env": env}}}
+    return ["--mcp-config", json.dumps(mcp),
+            "--permission-prompt-tool", "mcp__outerloop__approve"]
+
+
 def _real(cfg, role, prompt, cwd, allowed_tools, session_id, model,
-          on_event=lambda k, b: None):
+          on_event=lambda k, b: None, perm=None):
     """Shell headless claude, streaming events (--output-format stream-json) through
     on_event as they happen so the UI can show work in flight. Best-effort JSON parse
     of the result text. The hard per-run bound is a wall-clock deadline enforced on
@@ -162,6 +184,8 @@ def _real(cfg, role, prompt, cwd, allowed_tools, session_id, model,
         argv += ["--add-dir", str(cwd)]
     if allowed_tools:
         argv += ["--allowedTools", allowed_tools]
+    if perm:
+        argv += _perm_args(cfg, perm)
     # The prompt goes on STDIN, not as a positional arg: claude's --allowedTools and
     # --add-dir are variadic (<tools...>) and would swallow a trailing positional prompt.
     proc = subprocess.Popen(argv, cwd=str(cwd) if cwd else None,
@@ -249,8 +273,16 @@ def run_agent(ctx, role, prompt, *, ticket_id, ticket=None, cwd=None, allowed_to
         res = {"data": _fake(role, prompt), "text": "", "tokens_in": 0, "tokens_out": 0,
                "exit_code": 0, "timed_out": False}
     else:
+        # Permission bridge only for leased runs (epoch set): unleased runs (hub
+        # triage/scoring) would race the orphan sweep, and their 60s walls couldn't
+        # wait on a human anyway.
+        perm = None
+        if getattr(ctx, "epoch", None) is not None and ticket_id is not None:
+            perm = {"ticket_id": ticket_id, "epoch": ctx.epoch,
+                    "hub": getattr(ctx, "base_url", None),
+                    "token": getattr(ctx, "token", None)}
         res = _real(cfg, role, prompt + _schema_suffix(role), cwd, allowed_tools, session_id,
-                    model, on_event=emit)
+                    model, on_event=emit, perm=perm)
 
     tokens = res["tokens_in"] + res["tokens_out"]
     ctx.write("agent_run", session_id=session_id, ticket_id=ticket_id, role=role, prompt=prompt,
