@@ -1881,6 +1881,11 @@ func firstRunRolePicker() {
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)   // menu-bar only, no Dock icon
 installMainMenu()
+// Default open-at-login on first launch only; a later manual un-check sticks.
+if #available(macOS 13, *), !UserDefaults.standard.bool(forKey: "didDefaultLoginItem") {
+    if SMAppService.mainApp.status == .notRegistered { setLoginItem(true) }
+    UserDefaults.standard.set(true, forKey: "didDefaultLoginItem")
+}
 firstRunRolePicker()                   // choose hub/worker before the window builds
 let controller = Controller()
 app.run()
