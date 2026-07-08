@@ -43,6 +43,9 @@ deploy/mac/release-app.sh
 **3. Bump the tap** — in the separate repo `phyolim/homebrew-tap`, update `url` + `sha256`
 in `Formula/outerloop.rb` to the new tarball (and the cask to the new app zip).
 `brew upgrade outerloop` only delivers the release after this lands.
+The cask is `auto_updates` — installed apps self-update from GitHub releases (the
+popover's Update button; same-team bundle swap needs no App Management TCC grant),
+so the cask bump only matters for new installs.
 
 ---
 
