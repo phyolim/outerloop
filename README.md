@@ -1,16 +1,24 @@
 # outerloop
 
-**outerloop** turns the Macs you already own into a personal **agent fleet**. You drop
-tickets — ideas, bugs, chores — into one inbox; Claude Code agents groom them, write the
-code on an isolated branch, review it, and open a PR once it passes review. Anything
-irreversible — every merge — waits for **your approval** in a decision queue. Nothing
+**Vibe coding is fast — and amnesiac.** You chat, code appears, it ships. Six months
+later the repo can't tell you what changed where, why a feature exists, or which
+requirement a commit served. The chat log that held the "why" is gone; the git history
+that survives says nothing. Software teams solved this decades ago with the **outer
+loop**: requirement → ticket → branch → review → PR → merge. Chat-driven coding skips
+it — or makes *you* drive it by hand, re-pasting context, nagging the bot to open a PR,
+copying reviews back and forth.
+
+**outerloop automates the outer loop for Claude Code.** You file a ticket — that's the
+requirement. The ticket triggers everything else: an agent writes the code on its own
+branch with the ticket as context, a second agent reviews it, a PR opens that cites the
+ticket. Every commit traces to a ticket, every ticket holds its requirement, discussion,
+and review thread. The history writes itself; you just decide what merges. Nothing
 ships without you.
 
-One always-on Mac is the **hub** (queue, dashboard, scheduler); any other Mac can join
-as a **worker** and pick up work it's capable of. A single Mac is a complete fleet — the
-hub does its own work too. Machines find each other on your LAN by Bonjour name, or
-through a $5 SSH relay when you're away. No VPN, no Cloudflare, no OAuth, no cloud
-service.
+It runs on the Macs you already own. One always-on Mac is the **hub** (queue, dashboard,
+scheduler); any other Mac can join as a **worker**. A single Mac is a complete fleet —
+the hub does its own work too. Machines find each other on your LAN by Bonjour, or
+through a $5 SSH relay when you're away. No VPN, no OAuth, no cloud service.
 
 ## How you use it
 
@@ -51,40 +59,80 @@ to any ticket at any time to steer its next run.
 - A LAN-exposed hub always locks itself: worker auth on, and a dashboard password
   (self-generated and shown once if you don't set one — `outerloop status` recalls it).
 
-## What you need
+## Try it in two minutes (nothing to install)
 
-- A Mac with Python ≥ 3.9 — the system `/usr/bin/python3` is enough; zero pip installs.
-- On machines that do real coding work: `claude` (Claude Code CLI, logged in), `gh`
-  (authed), and `git` (commit identity set). `outerloop doctor` verifies all of it.
-
-## Install
+FAKE mode — the default from a clone — simulates the agents and GitHub, so the whole
+loop runs end to end with nothing installed but a Mac's own Python:
 
 ```sh
-brew tap phyolim/tap
-brew install outerloop                # CLI + service
-brew trust phyolim/tap                # one-time, required for the cask below
-brew install --cask outerloop-app     # optional menu-bar app (signed + notarized)
+git clone https://github.com/phyolim/outerloop && cd outerloop
+python3 -m outerloop init
+python3 -m outerloop serve            # dashboard at http://127.0.0.1:8765
+python3 -m outerloop tick             # advance the loop (second shell; run repeatedly)
 ```
 
-Open **Outerloop.app** and pick what this Mac is: **Hub**, **Hub + Worker** (one box
-that also does the work — the usual choice), or **Worker**. The app finishes the setup —
-dashboard password (shown once and copied to your clipboard), tokens, service start —
-then the dashboard is live at `http://<hub>.local:8765`.
+File a ticket, tick a few times, watch it reach the merge gate, approve it, tick again —
+merged. That's the whole product in miniature.
 
-Prefer the terminal?
+## Install for real
+
+Every Mac installs the same way:
 
 ```sh
-outerloop local role both             # this Mac = hub + its own worker
+brew install phyolim/tap/outerloop
+```
+
+Then tell that Mac what it is. Two cases:
+
+**Your first (or only) Mac — the hub.** Run this on the one always-on Mac that holds the
+queue and dashboard. It also does coding work itself, which is what you want on a single
+machine:
+
+```sh
+outerloop setup-both                  # hub + its own worker
 brew services start outerloop
-outerloop status                      # role, mode, health, dashboard password
+```
+
+Dashboard is now live at `http://<hub>.local:8765`; `outerloop status` prints the
+password.
+
+**Every other Mac — a worker.** Run this on each additional Mac you want to do coding
+work, then pair it to the hub (see "Add another Mac" below):
+
+```sh
+outerloop local role worker
+outerloop local hub_url http://<hub>.local:8765
+brew services start outerloop
+```
+
+The menu-bar app makes this one click instead — see below. Either way: **one hub, any
+number of workers.** (Rare: a hub that only coordinates and never codes — `outerloop
+setup-hub` instead of `setup-both`.)
+
+Any Mac doing coding work also needs `claude` (Claude Code CLI, logged in), `gh`
+(authed), and `git` (commit identity set) — `outerloop doctor` checks all of it. Python
+≥ 3.9 (the built-in `/usr/bin/python3`) is enough; zero pip installs.
+
+Prefer clicking to typing? The optional menu-bar app (signed + notarized) does the same
+setup — install it and pick **Hub**, **Hub + Worker**, or **Worker**:
+
+```sh
+brew trust phyolim/tap                # one-time, required for the cask
+brew install --cask outerloop-app
 ```
 
 ### Add another Mac
 
-Install the same way and pick **Worker**. Its menu-bar popover lists hubs it discovers
-on your network — click **Join** and it shows a 6-character code; type that code on the
-hub's Fleet page. That's the whole pairing. What a worker is allowed to claim is set by
-its **capabilities**, edited live on the Fleet page.
+A worker needs a token from the hub to join. Easiest with the app: the worker's menu-bar
+popover lists hubs on your network — click **Join**, it shows a 6-character code, type
+that code on the hub's **Fleet** page. Done.
+
+Pure CLI (no app): on the hub, `outerloop token <worker-name> <secret>`; on the worker,
+`outerloop local worker <worker-name>` and `outerloop local token <secret>`, then restart
+it.
+
+Either way, what each worker is allowed to work on is set by its **capabilities**, edited
+live on the hub's Fleet page.
 
 ### Away from home
 
@@ -92,20 +140,6 @@ The hub can dial out to a cheap VPS over SSH so you can reach the dashboard from
 anywhere (HTTPS + password) — no port opened at home. That walkthrough, plus the
 zero-touch `.pkg` installers for a managed fleet, lives in
 **[deploy/README.md](deploy/README.md)**.
-
-## Try it first (nothing required)
-
-FAKE mode — the default from a clone — simulates the agents and GitHub, so the whole
-loop runs end to end with nothing installed:
-
-```sh
-python3 -m outerloop init
-python3 -m outerloop serve            # dashboard at http://127.0.0.1:8765
-python3 -m outerloop tick             # advance the loop (second shell; run repeatedly)
-```
-
-File a ticket, tick a few times, watch it reach the merge gate, approve it, tick again —
-merged.
 
 ## Good to know
 
