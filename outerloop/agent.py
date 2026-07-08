@@ -17,7 +17,9 @@ import uuid
 def _fake(role, prompt):
     """Deterministic canned responses, one per role, enough to walk every stage."""
     if role == "triage":
-        return {"keep": True, "reason": "looks actionable (fake)"}
+        return {"keep": True, "reason": "looks actionable (fake)",
+                "impact": 4, "urgency": 3, "confidence": 4, "effort": 2,
+                "reversibility": "reversible", "justification": "fake estimate"}
     if role == "scorer":
         return {"impact": 4, "urgency": 3, "confidence": 4, "effort": 2,
                 "reversibility": "reversible", "justification": "fake estimate"}
@@ -59,7 +61,10 @@ def _fake(role, prompt):
 # FAKE returns canned dicts so it never needs it. Keyed by ROLE (always present) rather
 # than the optional json_schema arg, which callers set inconsistently.
 ROLE_SCHEMAS = {
-    "triage": '{"keep": true, "reason": "<one line>"}',
+    "triage": '{"keep": true, "reason": "<one line>", "impact": 3, "urgency": 3,'
+              ' "confidence": 3, "effort": 3, "reversibility": "reversible",'
+              ' "justification": "<one line>"}'
+              '\nWhen keep is false the rating fields are ignored, so any values are fine.',
     "scorer": '{"impact": 3, "urgency": 3, "confidence": 3, "effort": 3,'
               ' "reversibility": "reversible", "justification": "<one line>"}',
     "groomer": '{"tasks": ["..."], "acceptance_criteria": ["..."], "summary": "<one line>"}',

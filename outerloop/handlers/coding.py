@@ -101,7 +101,9 @@ class CodingHandler(base.Handler):
         else:
             wt.mkdir(parents=True, exist_ok=True)
             cwd, setup = wt, ""
-        crit = (hs.get("groom") or {}).get("acceptance_criteria", [])
+        groom = hs.get("groom") or {}
+        crit = groom.get("acceptance_criteria", [])
+        tasks = groom.get("tasks", [])
         clars = hs.get("clarifications", [])
         answered = "".join(f"\n  Q: {c['q']}\n  A: {c['a']}" for c in clars)
         # Bash included so the author can set up + iterate: clone, run tests, start a
@@ -113,11 +115,20 @@ class CodingHandler(base.Handler):
                               prompt=f"{setup}Implement this on branch {branch}.\n"
                                      f"{_kind_hint(ticket)}\n"
                                      f"TITLE: {ticket['title']}\nBODY: {ticket['body']}\n"
-                                     f"ACCEPTANCE: {crit}"
+                                     f"TASKS: {tasks}\nACCEPTANCE: {crit}"
                                      + (f"\nEARLIER CLARIFICATIONS (already answered — do NOT"
                                         f" re-ask):{answered}" if clars else ""))
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: author timed out"
+        # A timed-out author left partial (or no) work: don't commit-and-advance it into
+        # review — the review<->fix loop would then finish the implementation at
+        # reviewer+fixer prices. Persist hs (note_agent bumped consec_timeouts) and
+        # retry this stage in place; the setup prompt already reuses an existing worktree,
+        # and MAX_CONSEC_TIMEOUTS still fails a stuck author after the cap.
+        if res["timed_out"]:
+            base.save_hs(ctx, ticket, hs, "author_timeout",
+                         "author run timed out; retrying in place, not advancing to review")
+            return "author timed out (will retry)"
         # The author can pause to ask ONE question; block for a human answer and resume
         # here with it threaded back. Capped so it can't loop forever unattended — an
         # author STILL asking past the cap produced no code, so fail rather than
@@ -177,6 +188,24 @@ class CodingHandler(base.Handler):
     def _stage_reviewing(self, ctx, ticket, hs):
         rounds_used = hs.get("review_round", 0)
         diff = git_ops.branch_diff(ctx, ticket, hs)
+        # An empty diff means the author committed nothing (or base_branch degraded to
+        # HEAD, making the diff HEAD...HEAD). Reviewing nothing wastes a run and risks a
+        # blind approve that ships unreviewed — fail loud instead.
+        if not diff.strip():
+            base.fail(ctx, ticket,
+                      "branch diff is empty — nothing to review (check base_branch)")
+            return "empty diff -> error"
+        # A pathological diff (lockfile churn, vendored deps) would blow one round to
+        # hundreds of thousands of tokens, x MAX_REVIEW_ROUNDS. Don't truncate-and-review
+        # (a blind approve on a partial diff is worse than the spend) — hand it to a human.
+        if len(diff) > ctx.cfg.MAX_REVIEW_DIFF_CHARS:
+            gate.require(ctx, ticket, "review_exhausted",
+                         f"Diff too large for automated review ({len(diff):,} chars,"
+                         f" {hs.get('diff_stat') or 'no diff stat'})."
+                         f" Open the PR for manual review, or reject?",
+                         {"diff_stat": hs.get("diff_stat")},
+                         resume_stage="opening_pr")
+            return "diff too large -> decision queue"
         crit = (hs.get("groom") or {}).get("acceptance_criteria", [])
         res = agent.run_agent(
             ctx, "reviewer", ticket_id=ticket["id"],
@@ -207,16 +236,29 @@ class CodingHandler(base.Handler):
     # fixing -> reviewing: the fixer (may reuse author identity; only APPROVAL is forbidden).
     def _stage_fixing(self, ctx, ticket, hs):
         findings = hs.get("last_findings", [])
+        crit = (hs.get("groom") or {}).get("acceptance_criteria", [])
         res = agent.run_agent(ctx, "fixer", ticket_id=ticket["id"],
                               cwd=hs.get("worktree_path"),
                               worktree_path=hs.get("worktree_path"),
                               allowed_tools="Edit,Write,Bash",  # shell for iteration, same as author
-                              prompt=f"Address the reviewer findings.\nFINDINGS: {findings}\n"
+                              # Same brief the author got (title/body/acceptance) so the fixer
+                              # doesn't re-derive intent from the worktree at model prices — a
+                              # misread finding costs a full extra review+fix round.
+                              prompt=f"Address the reviewer findings on this ticket.\n"
+                                     f"TITLE: {ticket['title']}\nBODY: {ticket['body']}\n"
+                                     f"ACCEPTANCE: {crit}\nFINDINGS: {findings}\n"
                                      f"You may use the shell to run/test your work. COMMIT your"
                                      f" changes here when done. Do NOT push and do NOT open or"
                                      f" merge PRs — shipping is the orchestrator's job.")
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: fix timed out"
+        # Timed-out fixer: don't commit whatever is lying around and bounce back to the
+        # reviewer (that pays a reviewer round on half-applied fixes). Persist hs
+        # (consec_timeouts) and retry fixing in place; the cap still fails a stuck fixer.
+        if res["timed_out"]:
+            base.save_hs(ctx, ticket, hs, "fixer_timeout",
+                         "fixer run timed out; retrying in place, not re-entering review")
+            return "fixer timed out (will retry)"
         git_ops.commit_all(ctx, ticket, hs, f"ticket #{ticket['id']}: address review findings")
         base.set_stage(ctx, ticket, "reviewing", hs, "fixed",
                        f"fixer addressed findings (round {hs.get('review_round', 0)})")
@@ -263,12 +305,26 @@ class CodingHandler(base.Handler):
         num, url, err = git_ops.verify_pr(ctx, ticket, branch)
         if not num:
             # Never enter merge_gate with pr_number=None — every downstream gh call
-            # would degrade confusingly. No state change => the attempts ceiling
-            # retries this stage and eventually fails the ticket.
-            ctx.write("append_audit", ticket_id=ticket["id"], actor="handler:coding",
-                      action="pr_create_failed",
-                      reason=f"no PR verifiable for branch {branch}: {err or 'unknown'}")
+            # would degrade confusingly. A PR-create failure is usually deterministic
+            # (push rejected, auth), so cap retries here rather than burning a full
+            # shipper run per attempt up to the global MAX_ATTEMPTS ceiling.
+            tries = hs.get("pr_create_attempts", 0) + 1
+            if tries >= ctx.cfg.MAX_PR_CREATE_ATTEMPTS:
+                # Clear the counter BEFORE failing (mirrors _retry's attempts=0): a human
+                # Retry re-enters this stage and must get a fresh 3-attempt budget, not
+                # insta-fail on its first miss against a stale count.
+                hs.pop("pr_create_attempts", None)
+                base.save_hs(ctx, ticket, hs, "pr_create_gave_up",
+                             f"clearing retry counter after {tries} attempts")
+                base.fail(ctx, ticket,
+                          f"PR create failed {tries}x for branch {branch}: {err or 'unknown'}")
+                return "pr create failed (gave up)"
+            hs["pr_create_attempts"] = tries
+            base.save_hs(ctx, ticket, hs, "pr_create_failed",
+                         f"no PR verifiable for branch {branch} (attempt {tries}):"
+                         f" {err or 'unknown'}")
             return "pr create failed (will retry)"
+        hs.pop("pr_create_attempts", None)
         hs.pop("pending_action", None)
         hs["pr_number"], hs["pr_url"] = num, url
         base.set_stage(ctx, ticket, "merge_gate", hs, "pr_opened",
