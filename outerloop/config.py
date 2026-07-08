@@ -17,6 +17,7 @@ DB_PATH = HOME / "inbox.db"
 SCHEMA_PATH = REPO_ROOT / "schema.sql"
 PROMPTS_DIR = REPO_ROOT / "prompts"
 AGENTS_DIR = HOME / "agents"        # persona roster (user config — survives upgrades)
+STAFFING_FILE = HOME / "staffing.yml"  # per-project role->persona assignments
 WORKTREES_DIR = HOME / "worktrees"
 REPOS_DIR = HOME / "repos"          # clones of repos this orchestrator created itself
 ARTIFACTS_DIR = HOME / "artifacts"
@@ -184,10 +185,11 @@ def resolve_model(role, persona_model=None):
 # them from every heartbeat, so one Mac's stray OUTERLOOP_FAKE=1 can't run a fake
 # lifecycle inside a real fleet. Machine-local config (paths, binaries, identity)
 # is never inherited. HUB_MODELS wins over local model env once populated.
-# HUB_PERSONAS is None until a heartbeat delivers a roster (None = "no hub spoke
-# yet, use local files"; [] = "the hub says the roster is empty" — they differ).
+# HUB_PERSONAS / HUB_STAFFING are None until a heartbeat delivers them (None =
+# "no hub spoke yet, use local files"; []/{}= "the hub says empty" — they differ).
 HUB_MODELS = {}
 HUB_PERSONAS = None
+HUB_STAFFING = None
 
 
 def hub_cfg():
@@ -195,13 +197,14 @@ def hub_cfg():
     from . import personas  # late import: personas needs config's paths at module load
     return {"FAKE": FAKE, "ALLOW_MERGE_WITHOUT_CI": ALLOW_MERGE_WITHOUT_CI,
             "MODELS": {r: resolve_model(r) for r in ROLE_MODEL_DEFAULTS},
-            "PERSONAS": personas.load_personas()}
+            "PERSONAS": personas.load_personas(),
+            "STAFFING": personas.load_staffing()}
 
 
 def apply_hub_cfg(cfg):
     """Worker side: overwrite fleet-behavior knobs with the hub's. No-op when the
     hub predates this (no 'cfg' in the heartbeat) — local env keeps applying."""
-    global FAKE, ALLOW_MERGE_WITHOUT_CI, HUB_MODELS, HUB_PERSONAS
+    global FAKE, ALLOW_MERGE_WITHOUT_CI, HUB_MODELS, HUB_PERSONAS, HUB_STAFFING
     if not cfg:
         return
     FAKE = bool(cfg.get("FAKE", FAKE))
@@ -209,6 +212,8 @@ def apply_hub_cfg(cfg):
     HUB_MODELS = cfg.get("MODELS") or {}
     if "PERSONAS" in cfg:  # an old hub omits the key — keep using local files
         HUB_PERSONAS = cfg["PERSONAS"]
+    if "STAFFING" in cfg:
+        HUB_STAFFING = cfg["STAFFING"]
 
 
 # One uuid per process. Combined with a fresh heartbeat it is the real authority

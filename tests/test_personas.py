@@ -60,12 +60,14 @@ assert roster[1]["name"] == "foodie"  # name defaults to the filename stem
 bank = {"project": "Banking-App", "repo_path": None}
 food = {"project": None, "repo_path": "https://github.com/me/food-orderer"}
 other = {"project": "blog", "repo_path": None}
-assert personas.resolve("author", bank)["name"] == "fintech-ux"      # case-insensitive glob
-assert personas.resolve("author", food)["name"] == "foodie"          # matched via repo_path
-assert personas.resolve("author", other)["name"] == "generalist"     # fallback
-assert personas.resolve("reviewer", bank)["name"] == "generalist"    # fintech-ux can't review
-assert personas.resolve("groomer", bank) is None                     # nobody plays groomer
-assert personas.resolve("author", None) is None                      # no ticket context
+p, why = personas.resolve("author", bank)                            # case-insensitive glob
+assert p["name"] == "fintech-ux" and why == "persona glob banking-*", (p, why)
+assert personas.resolve("author", food)[0]["name"] == "foodie"       # matched via repo_path
+p, why = personas.resolve("author", other)
+assert p["name"] == "generalist" and why == "generalist"             # fallback
+assert personas.resolve("reviewer", bank)[0]["name"] == "generalist" # fintech-ux can't review
+assert personas.resolve("groomer", bank)[0] is None                  # nobody plays groomer
+assert personas.resolve("author", None)[0] is None                   # no ticket context
 
 # --- 3. model: persona wins over role routing (hub ships MODELS resolved, so a
 #        worker can't tell routing from defaults); alias resolves to a full id.
@@ -103,12 +105,12 @@ assert [p["name"] for p in cfg["PERSONAS"]] == ["fintech-ux", "foodie", "general
 config.apply_hub_cfg({"PERSONAS": [
     {"name": "hub-only", "description": "", "roles": [], "projects": [], "model": "",
      "body": "You come from the hub."}]})
-assert personas.resolve("author", bank)["name"] == "hub-only"
+assert personas.resolve("author", bank)[0]["name"] == "hub-only"
 config.apply_hub_cfg({"PERSONAS": []})
-assert personas.resolve("author", bank) is None          # hub says: no personas
+assert personas.resolve("author", bank)[0] is None       # hub says: no personas
 config.HUB_PERSONAS = None
 config.apply_hub_cfg({"FAKE": True})                     # old hub: key absent
-assert personas.resolve("author", bank)["name"] == "fintech-ux"
+assert personas.resolve("author", bank)[0]["name"] == "fintech-ux"
 
 # --- 6. roster cache invalidates on edit (the hub serves this every heartbeat).
 write("foodie.md", "---\nroles: author\nprojects: food-*\nname: foodie-2\n---\nNew voice.")

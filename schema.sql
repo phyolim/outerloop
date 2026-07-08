@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS agent_run (
     output_json   TEXT,
     tokens_in     INTEGER NOT NULL DEFAULT 0,
     tokens_out    INTEGER NOT NULL DEFAULT 0,
+    persona       TEXT,                         -- roster identity this run embodied (may be NULL)
     cost_usd      REAL,
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );

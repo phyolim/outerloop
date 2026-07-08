@@ -224,7 +224,7 @@ def run_agent(ctx, role, prompt, *, ticket_id, ticket=None, cwd=None, allowed_to
     exactly what the agent was told to be, and its model choice applies."""
     cfg = ctx.cfg
     session_id = session_id or str(uuid.uuid4())  # claude requires a canonical dashed UUID
-    persona = personas.resolve(role, ticket)
+    persona, persona_via = personas.resolve(role, ticket)
     if persona:
         prompt = personas.preamble(persona) + prompt
     model = cfg.resolve_model(role, persona_model=persona.get("model") if persona else None)
@@ -253,12 +253,14 @@ def run_agent(ctx, role, prompt, *, ticket_id, ticket=None, cwd=None, allowed_to
               exit_code=res["exit_code"], timed_out=1 if res["timed_out"] else 0,
               output_json=json.dumps(res["data"]),
               tokens_in=res["tokens_in"], tokens_out=res["tokens_out"],
+              persona=persona.get("name") if persona else None,
               actor=f"agent:{role}",
               reason=("timed out" if res["timed_out"] else "completed")
                      + f" ({tokens:,} tok, {model})"
-                     + (f" as '{persona.get('name')}'" if persona else ""),
+                     + (f" as '{persona.get('name')}' — {persona_via}" if persona else ""),
               detail={"role": role, "session_id": session_id, "model": model,
                       "persona": persona.get("name") if persona else None,
+                      "persona_via": persona_via if persona else None,
                       "timed_out": res["timed_out"],
                       "tokens_in": res["tokens_in"], "tokens_out": res["tokens_out"]})
     res["session_id"] = session_id

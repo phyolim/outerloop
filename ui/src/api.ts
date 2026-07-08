@@ -1,5 +1,6 @@
 import type {
   AddPayload,
+  AgentsResponse,
   DecisionsResponse,
   FleetResponse,
   LogEvent,
@@ -7,6 +8,7 @@ import type {
   InboxResponse,
   InsightsResponse,
   PairRequest,
+  ProjectsResponse,
   RawRequest,
   SearchResult,
   TicketsResponse,
@@ -23,6 +25,8 @@ export const queryKeys = {
   log: () => ['log'] as const,
   requests: () => ['requests'] as const,
   insights: () => ['insights'] as const,
+  agents: () => ['agents'] as const,
+  projects: () => ['projects'] as const,
 }
 
 function projectQuery(project: string): string {
@@ -193,4 +197,27 @@ export function saveFactors(
 
 export function fetchInsights(): Promise<InsightsResponse> {
   return getJSON('/ui/insights.json')
+}
+
+export function fetchAgents(): Promise<AgentsResponse> {
+  return getJSON('/ui/agents.json')
+}
+
+export function fetchProjects(): Promise<ProjectsResponse> {
+  return getJSON('/ui/projects.json')
+}
+
+export function saveAgent(payload: {
+  file: string
+  content: string
+}): Promise<{ ok: true; loaded: boolean }> {
+  return postJSON('/ui/agent-save', payload)
+}
+
+export function setStaffing(payload: {
+  project: string
+  role: string
+  persona: string // '' clears the slot (defaults apply)
+}): Promise<{ ok: true }> {
+  return postJSON('/ui/staffing-set', payload)
 }

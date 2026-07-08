@@ -68,10 +68,12 @@ def _migrate(conn):
         "claim_sub_stage": "claim_sub_stage TEXT", "claim_status": "claim_status TEXT",
     })
     # Token accounting (USD is legacy): model used + tokens consumed per run.
+    # persona: which roster identity the run embodied (staffing legibility).
     _ensure_columns(conn, "agent_run", {
         "model": "model TEXT",
         "tokens_in": "tokens_in INTEGER NOT NULL DEFAULT 0",
         "tokens_out": "tokens_out INTEGER NOT NULL DEFAULT 0",
+        "persona": "persona TEXT",
     })
     _ensure_columns(conn, "tick_run", {"tokens": "tokens INTEGER NOT NULL DEFAULT 0"})
     # 'rework' rides on status='rejected' because the CHECK constraint on older DBs

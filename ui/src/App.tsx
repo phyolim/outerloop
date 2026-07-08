@@ -5,6 +5,8 @@ import Board from './components/Board'
 import TicketPage from './components/TicketPage'
 import FleetPage from './components/FleetPage'
 import LogPage from './components/LogPage'
+import ProjectsPage from './components/ProjectsPage'
+import AgentsPage from './components/AgentsPage'
 import Shell from './components/Nav'
 import { onLinkClick, usePath } from './router'
 
@@ -28,6 +30,10 @@ function route(path: string) {
     return Number.isFinite(id) ? <TicketPage id={id} /> : <InboxPage />
   }
   if (path === '/board') return <Board />
+  if (path === '/projects' || path.startsWith('/projects/'))
+    return <ProjectsPage name={decodeURIComponent(path.split('/')[2] ?? '')} />
+  if (path === '/agents' || path.startsWith('/agents/'))
+    return <AgentsPage name={decodeURIComponent(path.split('/')[2] ?? '')} />
   if (path === '/fleet') return <FleetPage />
   if (path === '/log') return <LogPage />
   return <InboxPage /> // '/' — the operator's home

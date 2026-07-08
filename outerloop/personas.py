@@ -24,11 +24,29 @@ File format (<AGENTS_DIR>/fintech-ux.md):
 Omitted `roles` = plays any role; omitted `projects` = generalist (matches any
 ticket, but loses to a persona whose projects match explicitly). `projects` patterns
 are fnmatch globs tested case-insensitively against the ticket's project label AND
-its repo_path. No matching persona = no preamble — behavior is unchanged."""
+its repo_path. No matching persona = no preamble — behavior is unchanged.
+
+On top of the roster sits STAFFING (staffing.yml in the data dir, also hub-owned):
+explicit per-project role assignments, edited from the Projects page. Resolution
+precedence, deterministic and one-sentence explainable:
+
+    project staffing  >  persona project-glob match  >  generalist  >  stock prompt
+
+staffing.yml is a two-level map (this module reads/writes the subset it needs —
+no YAML dependency):
+
+    banking-app:
+      author: fintech-ux
+      reviewer: security-hawk
+"""
 
 import fnmatch
 
 from . import config
+
+# The staffing matrix's role slots (the coding pipeline). Other roles (knowledge,
+# ops, triage, scorer) still honor staffing entries if written by hand.
+STAFF_ROLES = ["groomer", "author", "reviewer", "fixer", "shipper"]
 
 # Loader cache keyed by the (path, mtime) signature of the roster directory, so the
 # hub can serve personas in every heartbeat without re-parsing unchanged files.
@@ -63,6 +81,7 @@ def _parse(path):
         "projects": [p.lower() for p in _parse_list(meta.get("projects", ""))],
         "model": meta.get("model", ""),
         "body": body,
+        "file": path.name,  # so the UI editor can address the file
     }
 
 
@@ -108,34 +127,122 @@ def _field(ticket, key):
 
 
 def _project_rank(patterns, ticket):
-    """-1 = excluded, 0 = generalist (no projects declared), 1 = explicit match."""
+    """(rank, matched_pattern): rank -1 = excluded, 0 = generalist (no projects
+    declared), 1 = explicit match."""
     if not patterns:
-        return 0
+        return 0, None
     targets = [str(_field(ticket, k) or "").lower() for k in ("project", "repo_path")]
     if targets[1]:  # repo_path is a canonical URL; also match its bare repo name
         targets.append(targets[1].rstrip("/").rsplit("/", 1)[-1].removesuffix(".git"))
     for pat in patterns:
         if any(t and fnmatch.fnmatch(t, pat) for t in targets):
-            return 1
-    return -1
+            return 1, pat
+    return -1, None
+
+
+# --- staffing map (project -> role -> persona name) --------------------------
+
+_staffing_cache = {"sig": None, "map": {}}
+
+
+def load_staffing():
+    """Parse staffing.yml -> {project: {role: persona_name}} (mtime-cached; the hub
+    serves this in every heartbeat). Projects keyed lowercase for matching; the file
+    keeps whatever case the user wrote."""
+    f = config.STAFFING_FILE
+    try:
+        sig = f.stat().st_mtime_ns
+    except OSError:
+        _staffing_cache["sig"], _staffing_cache["map"] = None, {}
+        return {}
+    if sig == _staffing_cache["sig"]:
+        return _staffing_cache["map"]
+    out, project = {}, None
+    try:
+        lines = f.read_text().splitlines()
+    except (OSError, UnicodeDecodeError) as e:
+        print(f"staffing: unreadable {f.name}: {e}")
+        lines = []
+    for ln in lines:
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        indented = ln[:1] in (" ", "\t")
+        key, sep, val = ln.strip().partition(":")
+        if not sep:
+            continue
+        key, val = key.strip().strip("'\""), val.strip().strip("'\"")
+        if not indented and not val:          # "banking-app:"
+            project = key.lower()
+            out.setdefault(project, {})
+        elif indented and project and val:    # "  author: fintech-ux"
+            out[project][key.lower()] = val
+    _staffing_cache["sig"], _staffing_cache["map"] = sig, out
+    return out
+
+
+def save_assignment(project, role, persona_name):
+    """Set (or clear, with persona_name=None/'') one slot and rewrite staffing.yml
+    canonically. The file is regenerated — hand-written comments do not survive."""
+    m = {p: dict(rs) for p, rs in load_staffing().items()}
+    project = project.strip().lower()
+    slot = m.setdefault(project, {})
+    if persona_name:
+        slot[role.lower()] = persona_name
+    else:
+        slot.pop(role.lower(), None)
+    if not slot:
+        m.pop(project, None)
+    lines = ["# outerloop staffing: which persona plays which role, per project.",
+             "# Edited from the Projects page; regenerated on every change."]
+    for p in sorted(m):
+        lines.append(f"{p}:")
+        lines += [f"  {r}: {m[p][r]}" for r in sorted(m[p])]
+    config.ensure_dirs()
+    config.STAFFING_FILE.write_text("\n".join(lines) + "\n")
+    _staffing_cache["sig"] = None  # next load re-reads
+    return m
+
+
+def staffing_map():
+    """Staffing in effect on THIS node: hub-inherited once delivered, else local."""
+    if config.HUB_STAFFING is not None:
+        return config.HUB_STAFFING
+    return load_staffing()
+
+
+def by_name(name):
+    for p in roster():
+        if p.get("name") == name:
+            return p
+    return None
 
 
 def resolve(role, ticket):
-    """The persona this role should embody for this ticket, or None. A persona whose
-    projects name the ticket's project/repo beats a generalist; within a rank the
-    first by filename wins (deterministic, legible)."""
+    """(persona, why) for this role + ticket — persona is None when nothing applies.
+    Precedence: project staffing > persona project-glob > generalist. `why` is the
+    one-sentence explanation the audit log and the Projects page both show."""
     if ticket is None:
-        return None
-    best, best_rank = None, -1
+        return None, "no ticket context"
+    proj = str(_field(ticket, "project") or "").strip().lower()
+    if proj:
+        assigned = (staffing_map().get(proj) or {}).get(role.lower())
+        if assigned:
+            p = by_name(assigned)
+            if p and p.get("body"):
+                return p, f"project staffing: {proj}"
+            # A staffing entry naming a missing persona falls through to the roster —
+            # a stale assignment must not silently strip the role of any persona.
+    best, best_rank, best_why = None, -1, ""
     for p in roster():  # .get: hub-inherited dicts may come from a different version
         if not p.get("body"):
             continue
         if p.get("roles") and role.lower() not in p["roles"]:
             continue
-        rank = _project_rank(p.get("projects"), ticket)
+        rank, pat = _project_rank(p.get("projects"), ticket)
         if rank > best_rank:
             best, best_rank = p, rank
-    return best
+            best_why = f"persona glob {pat}" if pat else "generalist"
+    return best, (best_why or "no persona")
 
 
 def preamble(persona):

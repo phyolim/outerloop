@@ -50,6 +50,18 @@ For each agent run: personas that can play the role are ranked — explicit proj
 match beats generalist; ties go to the first filename alphabetically. One persona per
 run. Files named `README.md` or starting with `_` are ignored (keep templates there).
 
+## Explicit staffing (Projects page / staffing.yml)
+
+On top of glob matching sits `staffing.yml` (next to the `agents/` dir): explicit
+per-project role assignments, edited from the dashboard's **Projects** page (the
+**Agents** page edits the persona files themselves). Full precedence:
+
+    project staffing  >  persona project-glob  >  generalist  >  stock role prompt
+
+An explicit assignment also overrides the persona's own `roles` list — you said so.
+Every agent run's audit line records both the persona and why it was chosen
+(`completed … as 'security-hawk' — project staffing: banking-app`).
+
 So "the UX author for the food-ordering app" is one file with
 `roles: author` + `projects: food-*`, and your finance specialist is another with
 `projects: banking-*` — tickets route to the right specialist by their project label,
