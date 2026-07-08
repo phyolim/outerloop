@@ -1413,18 +1413,26 @@ final class PopoverPane: NSViewController {
         let open = flatButton("Open Dashboard", fill: NSColor.white.withAlphaComponent(0.08), text: C.tx, border: nil,
                               font: .systemFont(ofSize: 12, weight: .semibold))
         open.target = self; open.action = #selector(openDashboard)
-        open.frame = NSRect(x: inset, y: y, width: 150, height: 26); view.addSubview(open)
-        let pause = flatButton(killEngaged ? "Resume all" : "Pause all", fill: nil, text: C.tx2,
+        open.frame = NSRect(x: inset, y: y, width: W - 2 * inset, height: 26); view.addSubview(open)
+        y += 32
+        // Two pause scopes on their own row so each label states what it stops:
+        // "Pause this Mac" drops a local KILL file (halts only this box's loop);
+        // "Pause fleet" is the hub-wide kill switch (no worker claims new work).
+        let half = (W - 2 * inset - 8) / 2
+        let pause = flatButton(killEngaged ? "Resume this Mac" : "Pause this Mac", fill: nil, text: C.tx2,
                                border: NSColor.white.withAlphaComponent(0.12), font: .systemFont(ofSize: 12))
+        pause.toolTip = killEngaged ? "This Mac is paused. Click to resume its loop."
+                                    : "Pause this Mac only — stops this machine's loop. Other workers keep running."
         pause.target = self; pause.action = #selector(pauseAll)
-        pause.frame = NSRect(x: inset + 158, y: y, width: 92, height: 26); view.addSubview(pause)
-        let kill = flatButton("◍", fill: killSwitchOn ? C.bad.withAlphaComponent(0.15) : nil, text: C.bad,
+        pause.frame = NSRect(x: inset, y: y, width: half, height: 26); view.addSubview(pause)
+        let kill = flatButton(killSwitchOn ? "◍ Resume fleet" : "◍ Pause fleet",
+                              fill: killSwitchOn ? C.bad.withAlphaComponent(0.15) : nil, text: C.bad,
                               border: C.bad.withAlphaComponent(killSwitchOn ? 0.6 : 0.3),
                               font: .systemFont(ofSize: 12))
-        kill.toolTip = killSwitchOn ? "Kill switch is ON — workers claim nothing. Click to resume."
+        kill.toolTip = killSwitchOn ? "Kill switch is ON — no worker in the fleet claims new work. Click to resume."
                                     : "Kill switch: stop the whole fleet from claiming new work"
         kill.target = self; kill.action = #selector(toggleKillSwitch)
-        kill.frame = NSRect(x: W - inset - 38, y: y, width: 38, height: 26); view.addSubview(kill)
+        kill.frame = NSRect(x: inset + half + 8, y: y, width: half, height: 26); view.addSubview(kill)
         y += 34
 
         // version footer: this app's build (hub version lives in the dashboard header),
