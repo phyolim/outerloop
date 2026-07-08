@@ -4,7 +4,7 @@ same write op the local helpers run, epoch-fenced inside the op's transaction.""
 
 import json
 
-from . import __version__, auth, claim, config, context, db, pairing, taxonomy
+from . import __version__, auth, claim, config, context, db, git_ops, pairing, taxonomy
 
 
 def handle(method, path, body, conn, auth_worker=None, intake_token=None):
@@ -118,6 +118,9 @@ def _create_ticket(conn, body):
     req = body.get("requires")
     kind = taxonomy.normalize_kind(body.get("kind"), body.get("type"))
     type_ = taxonomy.type_for(kind)
+    repo, rerr = git_ops.normalize_repo_path(body.get("repo_path"))
+    if rerr:
+        return 400, {"error": rerr}
     with db.immediate(conn):
         # Dedup check INSIDE the write transaction: concurrent webhook re-deliveries
         # (threaded hub) must not both pass a check-then-insert race.
@@ -130,7 +133,7 @@ def _create_ticket(conn, body):
             " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (body.get("title") or "", body.get("body") or "", type_, kind,
              json.dumps(req) if req is not None else "[]",
-             body.get("prefer"), body.get("pin"), body.get("repo_path"), body.get("project"), dk,
+             body.get("prefer"), body.get("pin"), repo, body.get("project"), dk,
              1 if body.get("draft") else 0))
         tid = cur.lastrowid
         db.append_audit(conn, body.get("source", "api"), "created",

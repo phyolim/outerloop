@@ -240,6 +240,14 @@ class CodingHandler(base.Handler):
                            f"opened PR #{num} (reviewed & stable)",
                            detail={"pr_url": hs["pr_url"]})
             return f"opened PR #{num} -> merge gate"
+        # Pre-flight: an unresolvable repo (repo_path not a URL / no origin remote) is
+        # a deterministic config error — no shipper run or retry can fix it, and every
+        # retry burns a full agent run. Fail loud BEFORE spawning the shipper; the
+        # human fixes repo_path (UI edit) and hits Retry, which re-enters this stage.
+        _, serr = git_ops.gh_slug(ctx, ticket)
+        if serr:
+            base.fail(ctx, ticket, f"cannot ship branch {branch}: {serr}")
+            return "unshippable repo_path -> error"
         hs["pending_action"] = {"kind": "pr_create", "branch": branch}
         base.save_hs(ctx, ticket, hs, "effect_pending", "about to open PR")
         res = agent.run_agent(

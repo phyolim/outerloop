@@ -2,6 +2,7 @@
 an append_audit() helper and a BEGIN IMMEDIATE transaction context manager."""
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 
@@ -77,6 +78,36 @@ def _migrate(conn):
     # 'rework' rides on status='rejected' because the CHECK constraint on older DBs
     # can't be altered without a table rebuild.
     _ensure_columns(conn, "decision", {"rework": "rework INTEGER NOT NULL DEFAULT 0"})
+    _rebuild_agent_run(conn)
+
+
+def _rebuild_agent_run(conn):
+    """The 'shipper' role (v0.3.7 lifecycle) is missing from agent_run's role CHECK on
+    DBs created earlier, so every shipper run 500s on INSERT and its opening_pr stage
+    spins until the stall guard fails the ticket. SQLite can't ALTER a CHECK, so those
+    DBs get a one-time rebuild — in ONE transaction, so a crash mid-rebuild can't
+    leave a fresh empty agent_run beside a stranded copy of the history."""
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table'"
+                       " AND name='agent_run'").fetchone()
+    if not row or "'shipper'" in row["sql"]:
+        return
+    # The new DDL comes from schema.sql itself (no duplicated CREATE to drift), pulled
+    # out as a single statement because executescript would commit mid-transaction.
+    m = re.search(r"CREATE TABLE IF NOT EXISTS agent_run\s*\(.*?\n\);",
+                  config.SCHEMA_PATH.read_text(), re.S)
+    assert m, "agent_run CREATE not found in schema.sql"
+    with immediate(conn):
+        conn.execute("ALTER TABLE agent_run RENAME TO agent_run_pre_shipper")
+        conn.execute(m.group(0))
+        # Copy by explicit shared-column list: an old DB's column ORDER differs from a
+        # fresh CREATE when columns arrived via earlier _ensure_columns migrations.
+        new = [r["name"] for r in conn.execute("PRAGMA table_info(agent_run)")]
+        old = {r["name"] for r in conn.execute("PRAGMA table_info(agent_run_pre_shipper)")}
+        cols = ",".join(c for c in new if c in old)
+        conn.execute(f"INSERT INTO agent_run({cols})"
+                     f" SELECT {cols} FROM agent_run_pre_shipper")
+        conn.execute("DROP TABLE agent_run_pre_shipper")  # takes the renamed index with it
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_agent_run_ticket ON agent_run(ticket_id)")
 
 
 def init_db():
