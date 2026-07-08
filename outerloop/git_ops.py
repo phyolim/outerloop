@@ -248,15 +248,19 @@ def cleanup_worktree(ctx, ticket, hs):
 
 
 def reap_worktrees(ctx):
-    """Remove worktrees whose ticket is no longer active/blocked (must-fix #7)."""
+    """Remove worktrees whose ticket is no longer live (must-fix #7). Live includes
+    parked-with-sub_stage (paused/terminated mid-flight): those are resumable in
+    place, so their workspace must survive until they're resumed, revived, or closed."""
     conn = ctx.conn
     for d in config.WORKTREES_DIR.glob("ticket-*"):
         try:
             tid = int(d.name.split("-")[1])
         except (IndexError, ValueError):
             continue
-        row = conn.execute("SELECT status FROM ticket WHERE id=?", (tid,)).fetchone()
-        if row and row["status"] in ("active", "blocked"):
+        row = conn.execute("SELECT status, sub_stage FROM ticket WHERE id=?",
+                           (tid,)).fetchone()
+        if row and (row["status"] in ("active", "blocked")
+                    or (row["status"] == "parked" and row["sub_stage"])):
             continue
         shutil.rmtree(d, ignore_errors=True)
         db.append_audit(conn, "recovery", "worktree_reaped",

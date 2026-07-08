@@ -7,7 +7,9 @@ import {
   dismissTicket,
   editTicket,
   fetchTicket,
+  pauseTicket,
   queryKeys,
+  resumeTicket,
   retryTicket,
   reviveTicket,
   saveFactors,
@@ -412,6 +414,8 @@ export default function TicketPage({ id }: { id: number }) {
   const close = useMutation({ mutationFn: () => closeTicket(id), onSuccess: invalidate })
   const start = useMutation({ mutationFn: () => startTicket(id), onSuccess: invalidate })
   const revive = useMutation({ mutationFn: () => reviveTicket(id), onSuccess: invalidate })
+  const pause = useMutation({ mutationFn: () => pauseTicket(id), onSuccess: invalidate })
+  const resume = useMutation({ mutationFn: () => resumeTicket(id), onSuccess: invalidate })
   const [editing, setEditing] = useState(false)
   const [opNote, setOpNote] = useState('')
   const comment = useMutation({
@@ -631,15 +635,38 @@ export default function TicketPage({ id }: { id: number }) {
               <p className="mono mb-2.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-tx2">
                 ⏸ on hold
               </p>
-              <div className="flex items-center gap-2">
-                <button onClick={() => revive.mutate()} disabled={revive.isPending} className={BTN.primary}>
+              <div className="flex flex-wrap items-center gap-2">
+                {ticket.sub_stage ? (
+                  <button onClick={() => resume.mutate()} disabled={resume.isPending} className={BTN.go}>
+                    ▶ Resume
+                  </button>
+                ) : null}
+                <button
+                  onClick={() => revive.mutate()}
+                  disabled={revive.isPending}
+                  className={ticket.sub_stage ? BTN.subtle : BTN.primary}
+                >
                   Restore to backlog
                 </button>
                 <span className="text-xs text-tx3">
-                  Triage set this aside — restoring sends it back to the backlog for scoring.
+                  {ticket.sub_stage
+                    ? 'Resume picks up at the stage it stopped on; Restore re-triages it from the backlog.'
+                    : 'Triage set this aside — restoring sends it back to the backlog for scoring.'}
                 </span>
-                {revive.isError ? <span className="text-xs text-bad">Failed.</span> : null}
+                {resume.isError || revive.isError ? (
+                  <span className="text-xs text-bad">Failed.</span>
+                ) : null}
               </div>
+            </div>
+          ) : ticket.status === 'active' ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={() => pause.mutate()} disabled={pause.isPending} className={BTN.subtle}>
+                {pause.isPending ? 'Pausing…' : '⏸ Pause'}
+              </button>
+              <span className="text-xs text-tx3">
+                Stops the current run and puts it on hold — Resume picks up at the same stage.
+              </span>
+              {pause.isError ? <span className="text-xs text-bad">Failed.</span> : null}
             </div>
           ) : (
             <p className="mono text-xs text-tx3">

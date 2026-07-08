@@ -7,7 +7,7 @@ import threading
 import uuid
 
 from . import config, db, gate, git_ops, leasing, scoring, triage
-from .context import Ctx
+from .context import Ctx, StaleEpoch
 from .handlers import base as hbase
 from .handlers import get_handler
 
@@ -188,12 +188,21 @@ def run_tick():
                 break
             if not leasing.acquire_lease(conn, t["id"], tick_id):
                 continue
+            # Fence this claim: a pause/close from the web process bumps claim_epoch,
+            # making the stage's remaining writes raise StaleEpoch instead of
+            # overwriting the human's decision (same contract as remote workers).
+            ctx.epoch = conn.execute("SELECT claim_epoch FROM ticket WHERE id=?",
+                                     (t["id"],)).fetchone()["claim_epoch"]
             try:
                 handler = get_handler(t["type"])
                 before = conn.execute("SELECT sub_stage, status FROM ticket WHERE id=?",
                                       (t["id"],)).fetchone()
                 try:
                     result = _process_one(ctx, t, handler)
+                except StaleEpoch as e:  # human paused/closed it mid-stage — clean abandon
+                    result = f"abandoned: {e}"
+                    db.append_audit(conn, "cron", "abandoned", str(e)[:300],
+                                    ticket_id=t["id"], tick_id=tick_id)
                 except Exception as e:  # one bad ticket must not kill the tick
                     result = f"error: {e}"
                     db.append_audit(conn, "cron", "error", str(e)[:300],
@@ -206,6 +215,7 @@ def run_tick():
                 advanced += 1
                 print(f"[tick {tick_id}] #{t['id']} ({t['type']}): {result}")
             finally:
+                ctx.epoch = None
                 leasing.release_lease(conn, t["id"])
 
         _backup(conn)

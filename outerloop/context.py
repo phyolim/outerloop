@@ -193,14 +193,20 @@ class _Bare:
 
 
 class Ctx:
-    """Local context: handlers' writes execute against the in-process SQLite conn."""
+    """Local context: handlers' writes execute against the in-process SQLite conn.
+    run_tick stamps `epoch` with the ticket's claim_epoch at lease time, so a human
+    pause/close from the web process (which bumps claim_epoch) fences an in-flight
+    local stage exactly like a remote worker's — its writes raise StaleEpoch instead
+    of silently overwriting the new status."""
 
     def __init__(self, conn, cfg, tick_id):
         self.conn = conn
         self.cfg = cfg
         self.tick_id = tick_id
+        self.epoch = None  # None outside a claimed ticket -> unfenced, as before
 
     def write(self, op, **kw):
+        kw.setdefault("epoch", self.epoch)
         return _LOCAL_OPS[op](self, kw)
 
     def renew(self):
