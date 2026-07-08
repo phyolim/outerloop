@@ -92,6 +92,10 @@ enum C {
 func monoFont(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
     NSFont.monospacedSystemFont(ofSize: size, weight: weight)
 }
+// Stamped into Info.plist by build-app.sh from outerloop/__init__.py ("?" on
+// unbundled dev runs where Bundle.main has no plist).
+let APP_VERSION = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "?"
+
 func label(_ s: String, _ font: NSFont, _ color: NSColor) -> NSTextField {
     let t = NSTextField(labelWithString: s)
     t.font = font; t.textColor = color; t.lineBreakMode = .byTruncatingTail
@@ -1306,7 +1310,13 @@ final class PopoverPane: NSViewController {
                                     : "Kill switch: stop the whole fleet from claiming new work"
         kill.target = self; kill.action = #selector(toggleKillSwitch)
         kill.frame = NSRect(x: W - inset - 38, y: y, width: 38, height: 26); view.addSubview(kill)
-        y += 40
+        y += 34
+
+        // version footer: this app's build (hub version lives in the dashboard header)
+        let verL = label("v\(APP_VERSION)", monoFont(10), C.tx3)
+        verL.frame = NSRect(x: inset, y: y, width: W - inset * 2, height: 13)
+        view.addSubview(verL)
+        y += 21
 
         view.setFrameSize(NSSize(width: W, height: y))
         preferredContentSize = NSSize(width: W, height: y)
@@ -1702,6 +1712,11 @@ final class Controller: NSObject, NSWindowDelegate {
         statusBlock.cell?.wraps = true
         block.addSubview(statusBlock)
         side.addSubview(block)
+
+        // app version, tucked above the status block
+        let verL = label("v\(APP_VERSION)", monoFont(10), C.tx3)
+        verL.frame = NSRect(x: 18, y: 72, width: 144, height: 13)
+        side.addSubview(verL)
 
         for p in panes {
             p.setFrameOrigin(NSPoint(x: 180, y: 0))
