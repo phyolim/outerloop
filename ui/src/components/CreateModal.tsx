@@ -21,6 +21,7 @@ function CreateModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     enabled: open,
   })
   const projects = data?.projects ?? []
+  const repos = data?.repos ?? []
 
   useEffect(() => {
     const d = ref.current
@@ -135,9 +136,15 @@ function CreateModal({ open, onClose }: { open: boolean; onClose: () => void }) 
               <input
                 value={form.repo_path}
                 onChange={(e) => ui$.form.repo_path.set(e.target.value)}
-                placeholder="~/code/my-app"
+                placeholder="~/code/my-app or github URL"
+                list="repo-list"
                 className={`${INPUT} mono w-full text-xs`}
               />
+              <datalist id="repo-list">
+                {repos.map((r) => (
+                  <option key={r} value={r} />
+                ))}
+              </datalist>
             </div>
           ) : null}
         </div>

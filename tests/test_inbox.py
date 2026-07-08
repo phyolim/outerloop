@@ -103,5 +103,12 @@ assert {t["id"] for t in tk2["tickets"]} == {2, 5}, tk2["tickets"]
 assert tk2["counts"] == {"backlog": 1, "active": 0, "blocked": 0, "onhold": 1, "failed": 0,
                          "done": 0, "open": 1, "all": 2}, tk2["counts"]
 
+# --- repos: deduped recently-used repo_path values for the create-form autocomplete ---
+c.execute("UPDATE ticket SET repo_path='https://github.com/me/old' WHERE id=1")
+c.execute("UPDATE ticket SET repo_path='https://github.com/me/new' WHERE id IN (2,7)")
+c.commit()
+assert h._tickets_json(c)["repos"] == \
+    ["https://github.com/me/new", "https://github.com/me/old"], h._tickets_json(c)["repos"]
+
 c.close()
 print("PASSED: inbox running/digest tones + tickets flat list, counts, project filter")
