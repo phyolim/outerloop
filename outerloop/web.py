@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, auth, config, db, pairing, scoring, taxonomy
+from . import __version__, auth, config, db, git_ops, pairing, scoring, taxonomy
 
 
 def _ctx_public(ctx):
@@ -343,7 +343,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json_send({"error": "title required"}, 400)
             kind = taxonomy.normalize_kind(body.get("kind"))
             type_ = taxonomy.type_for(kind)
-            repo = (body.get("repo_path") or "").strip() or None
+            repo, rerr = git_ops.normalize_repo_path(body.get("repo_path"))
+            if rerr:
+                return self._json_send({"error": rerr}, 400)
             # Draft by default (same rule as /add): pass "draft": false to start immediately.
             draft = 0 if body.get("draft") is False else 1
             with db.immediate(conn):
@@ -372,7 +374,9 @@ class Handler(BaseHTTPRequestHandler):
             title = (body.get("title") or "").strip()
             if not title:
                 return self._json_send({"error": "title required"}, 400)
-            repo = (body.get("repo_path") or "").strip() or None
+            repo, rerr = git_ops.normalize_repo_path(body.get("repo_path"))
+            if rerr:
+                return self._json_send({"error": rerr}, 400)
             proj = (body.get("project") or "").strip() or None
             with db.immediate(conn):
                 t = conn.execute("SELECT * FROM ticket WHERE id=?", (tid,)).fetchone()

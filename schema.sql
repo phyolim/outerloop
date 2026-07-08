@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS agent_run (
     id            TEXT PRIMARY KEY,             -- == session_id (assigned uuid)
     ticket_id     INTEGER NOT NULL REFERENCES ticket(id),
     role          TEXT NOT NULL
-                       CHECK(role IN ('groomer','author','reviewer','fixer','knowledge','ops','triage','scorer')),
+                       CHECK(role IN ('groomer','author','reviewer','fixer','shipper','knowledge','ops','triage','scorer')),
     tick_id       TEXT NOT NULL,
     session_id    TEXT NOT NULL,
     prompt        TEXT NOT NULL,

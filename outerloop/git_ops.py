@@ -66,6 +66,33 @@ def create_repo(ctx, ticket):
     return re.sub(r"\.git$", "", out.strip()), ""
 
 
+def normalize_repo_path(repo_path):
+    """Canonicalize a human-supplied repo_path at intake (UI/API): repo_path is
+    machine-independent ticket state, so a local clone path must be resolved to its
+    origin URL BEFORE it is stored — accepted verbatim, it strands every other worker
+    and, worse, makes the author's clone destination equal its clone source, so the
+    agent just git-inits an origin-less repo the shipper can never push (ticket #8).
+    Returns (canonical_value_or_None, error_or_None); empty input is (None, None).
+    FAKE mode passes anything through verbatim — nothing there ever touches git."""
+    repo_path = (repo_path or "").strip()
+    if not repo_path:
+        return None, None
+    if config.FAKE:
+        return repo_path, None
+    if _REMOTE_URL_RE.match(repo_path):
+        return re.sub(r"\.git$", "", repo_path.rstrip("/")), None
+    p = Path(repo_path).expanduser()
+    if not p.is_dir():
+        return None, (f"repo_path is neither a remote URL nor a directory on this"
+                      f" machine: {repo_path} — use the repo's URL")
+    code, out, err = _run(None, [config.GIT_BIN, "-C", str(p),
+                          "remote", "get-url", "origin"])
+    if code != 0 or not out:
+        return None, (f"local repo {repo_path} has no origin remote to canonicalize"
+                      " — use the repo's URL")
+    return re.sub(r"\.git$", "", out.strip().rstrip("/")), None
+
+
 def gh_slug(ctx, ticket):
     """The 'owner/name' GitHub slug for `gh -R`, derived from the ticket's CANONICAL
     repo_path (a remote URL, or a local path whose origin remote we read). repo_path
