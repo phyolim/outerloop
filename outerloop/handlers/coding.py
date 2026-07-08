@@ -70,9 +70,25 @@ class CodingHandler(base.Handler):
                          f"No repo set for this ticket. Create new private GitHub repo '{name}'?",
                          {"repo_name": name}, resume_stage="creating_repo")
             return "new repo gated"
+        if not ctx.cfg.FAKE:
+            # repo_path may be a bare remote URL (a human pointed the ticket at an
+            # existing repo directly, bypassing the create_repo gate above, which only
+            # fires when repo_path is empty) — every git_ops call after this assumes a
+            # local clone, so resolve/clone it once before touching the worktree.
+            local, err = git_ops.ensure_local_clone(ctx, ticket)
+            if err:
+                base.fail(ctx, ticket, f"repo clone failed: {err}")
+                return "repo clone failed -> error"
+            if local != ticket["repo_path"]:
+                ctx.write("set_repo_path", ticket_id=ticket["id"], repo_path=local)
+                ticket = ctx.conn.execute("SELECT * FROM ticket WHERE id=?",
+                                          (ticket["id"],)).fetchone()
         branch = hs.get("branch") or git_ops.new_branch(ticket["id"])
         hs["branch"] = branch
-        wt = git_ops.create_worktree(ctx, ticket, branch)
+        wt, err = git_ops.create_worktree(ctx, ticket, branch)
+        if err:
+            base.fail(ctx, ticket, f"worktree creation failed: {err}")
+            return "worktree creation failed -> error"
         hs["worktree_path"] = str(wt)
         hs.setdefault("base_branch", git_ops.repo_head(ctx, ticket))
         crit = (hs.get("groom") or {}).get("acceptance_criteria", [])

@@ -12,6 +12,8 @@ import uuid
 
 from . import config, db
 
+_REMOTE_URL_RE = re.compile(r"^(https?://|git@|ssh://)")
+
 
 def _run(cfg, argv, cwd=None):
     """List-form only. Returns (returncode, stdout, stderr)."""
@@ -49,6 +51,31 @@ def create_repo(ctx, ticket):
     return dest, ""
 
 
+def ensure_local_clone(ctx, ticket):
+    """A ticket's repo_path may be a bare remote URL rather than a local clone — the
+    ticket-creation UI takes repo_path as free text with no clone step, so a human
+    pointing a ticket at an EXISTING repo (instead of using the create_repo gate, which
+    only fires when repo_path is empty) ends up with e.g.
+    'https://github.com/o/r' in the column. Every other git_ops function does
+    `git -C ticket['repo_path'] ...`, which silently fails on a URL (-C needs a real
+    local dir) — clone it once into REPOS_DIR, idempotent by repo name, and return the
+    local path so the rest of the coding lifecycle sees an ordinary local clone.
+    Returns (local_path_or_None, error_or_None); a repo_path that's already a local
+    path (or ticket has none) passes through unchanged with no error."""
+    repo_path = ticket["repo_path"]
+    if not repo_path or not _REMOTE_URL_RE.match(repo_path):
+        return repo_path, None
+    name = re.sub(r"\.git$", "", repo_path.rstrip("/")).rsplit("/", 1)[-1]
+    dest = config.REPOS_DIR / name
+    if dest.exists():  # idempotent retry guard, same as create_repo
+        return str(dest), None
+    config.REPOS_DIR.mkdir(parents=True, exist_ok=True)
+    code, out, err = _run(ctx.cfg, [ctx.cfg.GH_BIN, "repo", "clone", repo_path, str(dest)])
+    if code != 0 or not dest.exists():
+        return None, (err or out or "gh repo clone failed")
+    return str(dest), None
+
+
 def repo_head(ctx, ticket):
     """The repo's current branch — the base a new worktree branches from. Recorded so
     the reviewer can diff the branch locally (review happens BEFORE any PR exists)."""
@@ -71,16 +98,23 @@ def branch_diff(ctx, ticket, hs):
 
 
 def create_worktree(ctx, ticket, branch):
-    """Idempotent: reuse an existing tree for this ticket if present."""
+    """Idempotent: reuse an existing tree for this ticket if present. Returns
+    (path_or_None, error_or_None) — a git failure must surface here, not as a
+    confusing FileNotFoundError from whatever later tries to use the never-created
+    path as a subprocess cwd (must-fix: `git worktree add`'s exit code was previously
+    discarded entirely)."""
     path = config.WORKTREES_DIR / f"ticket-{ticket['id']}-{branch.rsplit('-', 1)[-1]}"
     if path.exists():
-        return path
+        return path, None
     if ctx.cfg.FAKE or not ticket["repo_path"]:
         path.mkdir(parents=True, exist_ok=True)
-        return path
-    _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", ticket["repo_path"],
-                   "worktree", "add", str(path), "-b", branch])
-    return path
+        return path, None
+    config.WORKTREES_DIR.mkdir(parents=True, exist_ok=True)
+    code, out, err = _run(ctx.cfg, [ctx.cfg.GIT_BIN, "-C", ticket["repo_path"],
+                          "worktree", "add", str(path), "-b", branch])
+    if code != 0 or not path.exists():
+        return None, (err or out or "git worktree add failed")
+    return path, None
 
 
 def open_pr(ctx, ticket, hs):
