@@ -65,6 +65,8 @@ MAX_REVIEW_ROUNDS = 3       # reviewing<->fixing hard cap, then escalate
 MAX_CLARIFICATIONS = 3      # author may ask the human this many questions before proceeding
 MAX_ATTEMPTS = 12           # per-ticket global stage-entry ceiling -> failed
 MAX_CONSEC_TIMEOUTS = 2     # consecutive agent timeouts on a ticket -> failed
+MAX_PR_CREATE_ATTEMPTS = 3  # shipper runs before a failing PR-create gives up (deterministic errs)
+MAX_REVIEW_DIFF_CHARS = 100_000  # diffs larger than this gate to a human, never auto-review
 MAX_TICKETS_PER_TICK = 3
 # Budgets are in TOKENS (input + cache_creation + output; cache READS excluded — they
 # are near-free and would swamp the signal). USD is legacy: on a subscription every
@@ -145,7 +147,8 @@ ROLE_MODEL_DEFAULTS = {
     "knowledge": "sonnet",  # research/write a deliverable
     "ops": "sonnet",        # draft an external action
     "author": "opus",       # write the code — the deep-work role
-    "fixer": "opus",        # address review findings in code
+    "fixer": "sonnet",      # address enumerated findings in an existing worktree — scoped
+                            # work sonnet handles; override OUTERLOOP_MODELS=fixer=opus to revert
     "warmup": "haiku",      # one-time permission warm-up — echo + write a file
 }
 DEFAULT_MODEL_TIER = "sonnet"
