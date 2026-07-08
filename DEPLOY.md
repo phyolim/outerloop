@@ -73,11 +73,10 @@ in `Formula/outerloop.rb` to the new tarball (and the cask to the new app zip).
   (VPS host + tunnel user + SSH key path, written to `settings.json`); the tunnel wrapper
   reads it at launch, so no rebuild to add/change/disable remote access. The tunnel is an
   outbound `ssh -R`, so no home port is opened.
-- **Never bind the hub's own port to a public IP.** The web UI has no login of its
-  own — auth.py's bearer tokens only gate `/api` (worker traffic); every browser
-  route, including `POST /worker-pair` (which mints a fresh worker token to whoever
-  asks), is open to anyone who can reach the port. The code refuses to bind a
-  routable public address by default (`is_safe_bind` in [outerloop/auth.py](outerloop/auth.py),
-  override with `OUTERLOOP_ALLOW_PUBLIC_BIND=1`) precisely to stop this. The relay is
-  what makes remote access safe: Caddy's basic-auth sits in front of *all* browser
-  routes, not just `/api`, so nothing unauthenticated reaches the hub at all.
+- **Never bind the hub's own port to a public IP.** The code refuses a routable public
+  bind by default (`is_safe_bind` in [outerloop/auth.py](outerloop/auth.py); override
+  with `OUTERLOOP_ALLOW_PUBLIC_BIND=1`). A LAN-bound hub does lock both doors on its
+  own — bearer tokens on the worker `/api`, a password on the dashboard — but that
+  cookie gate is a LAN-grade lock, not an internet-facing one. The relay is the
+  supported way to expose the hub beyond your LAN: Caddy's basic-auth + HTTPS sit in
+  front of *every* route, so nothing unauthenticated reaches the hub at all.
