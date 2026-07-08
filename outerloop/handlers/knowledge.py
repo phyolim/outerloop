@@ -23,7 +23,8 @@ class KnowledgeHandler(base.Handler):
     def _draft(self, ctx, ticket, hs):
         res = agent.run_agent(ctx, "knowledge", ticket_id=ticket["id"], ticket=ticket,
                               prompt=f"Research and draft a deliverable.\n"
-                                     f"TITLE: {ticket['title']}\nBODY: {ticket['body']}")
+                                     f"TITLE: {ticket['title']}\nBODY: {ticket['body']}"
+                                     + base.operator_notes(hs))
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: draft timed out"
         # On a JSON-parse miss `data` has no 'deliverable'; fall back to raw text, and
@@ -44,7 +45,8 @@ class KnowledgeHandler(base.Handler):
 
     def _review(self, ctx, ticket, hs):
         res = agent.run_agent(ctx, "reviewer", ticket_id=ticket["id"], ticket=ticket,
-                              prompt=f"Review this deliverable for quality.\n"
+                              prompt=f"Review this deliverable for quality."
+                                     f"{base.operator_notes(hs)}\n"
                                      f"{open(hs['artifact']).read()[:4000]}")
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: review timed out"

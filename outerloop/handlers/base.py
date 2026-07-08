@@ -53,6 +53,17 @@ def fail(ctx, ticket, reason):
     ctx.write("fail", ticket_id=ticket["id"], actor=f"handler:{ticket['type']}", reason=reason)
 
 
+def operator_notes(hs):
+    """Human steering left on the ticket (/ui/comment, or the note on a rework
+    decision). Storage alone reaches nobody — context._keep_operator_notes only
+    guarantees notes SURVIVE; every stage that builds an agent prompt must append
+    this so a comment keeps steering as the ticket progresses. Empty string when
+    there are no notes, so callers can always '+' it onto the prompt."""
+    notes = "".join(f"\n  - {c['a']}" for c in hs.get("clarifications", [])
+                    if c.get("q") == "(operator note)")
+    return f"\nOPERATOR NOTES (human steering — honor these):{notes}" if notes else ""
+
+
 def note_agent(ctx, ticket, hs, res):
     """Track consecutive agent timeouts; fail the ticket after the cap (must-fix #5).
     Returns True if it is safe to continue this stage, False if the ticket was failed."""

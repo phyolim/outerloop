@@ -42,7 +42,8 @@ class CodingHandler(base.Handler):
         res = agent.run_agent(ctx, "groomer", ticket_id=ticket["id"], ticket=ticket,
                               prompt=f"Expand into tasks + acceptance criteria.\n"
                                      f"{_kind_hint(ticket)}\n"
-                                     f"TITLE: {ticket['title']}\nBODY: {ticket['body']}")
+                                     f"TITLE: {ticket['title']}\nBODY: {ticket['body']}"
+                                     + base.operator_notes(hs))
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: groom timed out"
         hs["groom"] = res["data"]
@@ -212,7 +213,7 @@ class CodingHandler(base.Handler):
         res = agent.run_agent(
             ctx, "reviewer", ticket_id=ticket["id"], ticket=ticket,
             prompt=f"Review this branch diff against the acceptance criteria. ROUND: {rounds_used}\n"
-                   f"ACCEPTANCE: {crit}\nDIFF:\n{diff}")
+                   f"ACCEPTANCE: {crit}{base.operator_notes(hs)}\nDIFF:\n{diff}")
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: review timed out"
         hs["reviewer_session_id"] = res["session_id"]
@@ -251,7 +252,8 @@ class CodingHandler(base.Handler):
                                      f"ACCEPTANCE: {crit}\nFINDINGS: {findings}\n"
                                      f"You may use the shell to run/test your work. COMMIT your"
                                      f" changes here when done. Do NOT push and do NOT open or"
-                                     f" merge PRs — shipping is the orchestrator's job.")
+                                     f" merge PRs — shipping is the orchestrator's job."
+                                     + base.operator_notes(hs))
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: fix timed out"
         # Timed-out fixer: don't commit whatever is lying around and bounce back to the
@@ -396,10 +398,6 @@ class CodingHandler(base.Handler):
         config.ensure_dirs()
         clone = config.REPOS_DIR / git_ops.clone_name(ticket["repo_path"] or "unset")
         crit = (hs.get("groom") or {}).get("acceptance_criteria", [])
-        # Operator notes on the failed merge ("resolve conflicts from the remote", ...)
-        # ride the clarifications channel — thread them in so steering isn't lost.
-        notes = "".join(f"\n  - {c['a']}" for c in hs.get("clarifications", [])
-                        if c.get("q") == "(operator note)")
         res = agent.run_agent(
             ctx, "fixer", ticket_id=ticket["id"], ticket=ticket,
             cwd=config.WORKTREES_DIR, worktree_path=wt, allowed_tools="Edit,Write,Bash",
@@ -423,8 +421,7 @@ class CodingHandler(base.Handler):
                    f"Do NOT merge the PR itself and do NOT touch any other branch —"
                    f" merging is the orchestrator's job.\n"
                    f"TITLE: {ticket['title']}\nBODY: {ticket['body']}\n"
-                   f"ACCEPTANCE: {crit}"
-                   + (f"\nOPERATOR NOTES:{notes}" if notes else ""))
+                   f"ACCEPTANCE: {crit}" + base.operator_notes(hs))
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: conflict resolution timed out"
         if res["timed_out"]:
