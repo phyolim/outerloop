@@ -17,13 +17,14 @@ def fake_run(argv):
     calls.append(("run", argv[0]))
 
 
-def real_ok(cfg, role, prompt, cwd, allowed_tools, session_id, on_event=None):
+def real_ok(cfg, role, prompt, cwd, allowed_tools, session_id, model, on_event=None):
     calls.append(("claude", role))
     assert role == "warmup" and "Bash" in allowed_tools
+    assert model, "warmup must pass a resolved model to _real"
     return {"exit_code": 0, "timed_out": False}
 
 
-def real_fail(cfg, role, prompt, cwd, allowed_tools, session_id, on_event=None):
+def real_fail(cfg, role, prompt, cwd, allowed_tools, session_id, model, on_event=None):
     calls.append(("claude", role))
     return {"exit_code": 1, "timed_out": False}
 

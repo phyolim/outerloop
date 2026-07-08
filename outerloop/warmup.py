@@ -42,7 +42,8 @@ def run_warmup(run=None, real=None):
                    "1. With the Bash tool run: echo warmup-ok\n"
                    "2. With the Write tool create warmup.txt containing: ok\n"
                    "Then reply with exactly: done",
-                   scratch, "Edit,Write,Bash", str(uuid.uuid4()))
+                   scratch, "Edit,Write,Bash", str(uuid.uuid4()),
+                   config.resolve_model("warmup"))
     except Exception as e:  # noqa: BLE001
         print(f"warmup: claude run failed: {e}")
         return False

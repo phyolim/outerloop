@@ -41,7 +41,10 @@ you file it → triaged & prioritized → agent writes code on a branch
 ```
 
 Along the way the agent may pause to **ask you a question** — answer in the ticket
-thread and work resumes with your answer. At the **merge gate** you see the PR link,
+thread and work resumes with your answer. If a run needs a tool permission it doesn't
+have, that lands in the thread too as an **Allow / Deny** decision (instead of being
+silently auto-denied on the worker); no answer within a few minutes denies it and the
+run moves on. At the **merge gate** you see the PR link,
 diff stat, and CI status; **Approve & merge**, **Request changes** (your note goes
 straight to the agent for another pass), or **Reject** to stop. You can also add a note
 to any ticket at any time to steer its next run.

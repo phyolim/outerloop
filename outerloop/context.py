@@ -172,10 +172,42 @@ def _require(ctx, k):
     return {"decision_id": did}
 
 
+def _perm_ask(ctx, k):
+    """A live agent run asking to use a gated tool (see permission_mcp). Unlike
+    _require this must NOT block the ticket or set blocked_by_decision_id: the run
+    is still executing, waiting on the answer — nothing may re-enter the stage."""
+    conn = ctx.conn
+    with db.immediate(conn):
+        _fence(conn, k["ticket_id"], k.get("epoch"))
+        cur = conn.execute(
+            "INSERT INTO decision(ticket_id, kind, question, context) VALUES(?,?,?,?)",
+            (k["ticket_id"], "permission", k["question"], k.get("context") or "{}"))
+        did = cur.lastrowid
+        db.append_audit(conn, "gate", "permission_asked", k["question"][:300],
+                        ticket_id=k["ticket_id"], tick_id=ctx.tick_id,
+                        detail={"decision_id": did})
+        trow = conn.execute("SELECT title FROM ticket WHERE id=?", (k["ticket_id"],)).fetchone()
+    notify.send(conn, "Permission needed",
+                f"#{k['ticket_id']} {trow['title'] if trow else ''}\n{k['question']}")
+    return {"decision_id": did}
+
+
+def _perm_expire(ctx, k):
+    """Void an unanswered permission ask when its run gives up waiting — a later
+    human answer must be a no-op, not an approval nobody consumes."""
+    conn = ctx.conn
+    with db.immediate(conn):
+        n = conn.execute(
+            "UPDATE decision SET status='rejected', consumed=1, answered_at=datetime('now'),"
+            " answer_note=? WHERE id=? AND status='pending' AND kind='permission'",
+            (k.get("note") or "(expired unanswered)", k["decision_id"])).rowcount
+    return {"expired": bool(n)}
+
+
 _LOCAL_OPS = {
     "set_stage": _set_stage, "save_hs": _save_hs, "fail": _fail,
     "append_audit": _append_audit, "agent_run": _agent_run, "agent_event": _agent_event,
-    "require": _require,
+    "require": _require, "perm_ask": _perm_ask, "perm_expire": _perm_expire,
     "set_repo_path": _set_repo_path,
 }
 

@@ -170,6 +170,7 @@ def scheduler_once():
         ctx = Ctx(conn, config, "sched-" + uuid.uuid4().hex[:8])
         leasing.reclaim_fleet(conn, ctx.tick_id)
         leasing.park_stranded(conn, ctx.tick_id)
+        gate.expire_orphan_permissions(conn)
         git_ops.reap_worktrees(ctx)  # this box's own disk (combined role=both included)
         triage.triage_new(ctx)
         scoring.score_unscored(ctx)
