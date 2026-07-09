@@ -24,6 +24,7 @@ class KnowledgeHandler(base.Handler):
         res = agent.run_agent(ctx, "knowledge", ticket_id=ticket["id"], ticket=ticket,
                               prompt=f"Research and draft a deliverable.\n"
                                      f"TITLE: {ticket['title']}\nBODY: {ticket['body']}"
+                                     + base.answered_clarifications(hs)
                                      + base.operator_notes(hs))
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: draft timed out"
