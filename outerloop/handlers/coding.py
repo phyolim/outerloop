@@ -311,8 +311,15 @@ class CodingHandler(base.Handler):
                    f" can be run locally (dev server, static page): capture screenshot(s)"
                    f" of the changed screens (e.g. start the app, then"
                    f" `npx playwright screenshot <url> shot.png`), save them under"
-                   f" .outerloop/screenshots/ in this worktree, and commit them on"
-                   f" {branch}. If there is no visible surface or the app cannot be run,"
+                   f" .outerloop/screenshots/ in this worktree, then commit-and-revert so"
+                   f" the images are fetchable by sha but NEVER reach the merged tree:\n"
+                   # The PR keeps refs/pull/N/head alive on GitHub even after the branch
+                   # is deleted, so a sha that was ever part of the PR serves raw URLs
+                   # forever — while the paired revert keeps the squash-merge (and the
+                   # reviewers' net diff) free of image blobs.
+                   f"   git add .outerloop/screenshots && git commit -m 'pr screenshots'\n"
+                   f"   SHOT_SHA=$(git rev-parse HEAD) && git revert --no-edit HEAD\n"
+                   f" If there is no visible surface or the app cannot be run,"
                    f" SKIP this step entirely — do not force it or burn time on it.\n"
                    f"3. Push the branch: git push -u origin {branch}\n"
                    f"4. If no PR exists for it yet, open one (do NOT create a duplicate if"
@@ -323,9 +330,9 @@ class CodingHandler(base.Handler):
                    f" with these sections: '## Summary' (what changed and"
                    f" why, 1-3 sentences), '## Changes' (bullet list of the notable"
                    f" changes), '## Screenshots' (only if step 2 captured any: embed each"
-                   f" as ![name](https://raw.githubusercontent.com/{slug}/<commit sha from"
-                   f" `git rev-parse HEAD`>/.outerloop/screenshots/<name>.png) — the sha,"
-                   f" NOT the branch name), and '## Test plan' (how it was/should be"
+                   f" as ![name](https://raw.githubusercontent.com/{slug}/$SHOT_SHA"
+                   f"/.outerloop/screenshots/<name>.png) — always that sha, never a"
+                   f" branch name), and '## Test plan' (how it was/should be"
                    f" verified). Base it on the ticket and the actual diff — do not invent"
                    f" changes that aren't in the diff.\n"
                    f"   Then open it: gh pr create --head {branch}"

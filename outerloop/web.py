@@ -246,7 +246,10 @@ class Handler(BaseHTTPRequestHandler):
         name = parse_qs(u.query).get("name", [""])[0]
         # Keep only a safe basename; a timestamp prefix makes collisions a non-issue.
         safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.") or "file"
-        n = int(self.headers.get("Content-Length", 0))
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return self._json_send({"error": "bad Content-Length"}, 400)
         if n <= 0 or n > self._ATTACH_MAX:
             return self._json_send({"error": f"size must be 1..{self._ATTACH_MAX} bytes"}, 400)
         data = self.rfile.read(n)
