@@ -250,10 +250,18 @@ class Handler(BaseHTTPRequestHandler):
         if n <= 0 or n > self._ATTACH_MAX:
             return self._json_send({"error": f"size must be 1..{self._ATTACH_MAX} bytes"}, 400)
         data = self.rfile.read(n)
+        if len(data) != n:  # client aborted mid-upload: don't store a truncated blob
+            return self._json_send({"error": "body shorter than Content-Length"}, 400)
         config.ensure_dirs()
         stored = f"{int(time.time() * 1000)}-{safe}"
         (config.ATTACHMENTS_DIR / stored).write_bytes(data)
         return self._json_send({"url": f"/attachments/{stored}", "name": safe})
+
+    # The only content types an attachment may render inline. Anything else —
+    # notably svg/html/xml, which would execute same-origin as the dashboard
+    # (stored XSS: uploaded <script> could drive every /ui/* write) — downloads
+    # as an opaque blob instead.
+    _INLINE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
 
     def _serve_attachment(self, path):
         """GET /attachments/<stored>: same trust zone as the SPA (cookie-gated when a
@@ -263,7 +271,17 @@ class Handler(BaseHTTPRequestHandler):
         if not stored or not f.is_file():
             return self._json_send({"error": "not found"}, 404)
         ctype = mimetypes.guess_type(stored)[0] or "application/octet-stream"
-        self._send(f.read_bytes(), ctype=ctype)
+        if ctype not in self._INLINE_TYPES:
+            ctype = "application/octet-stream"
+        data = f.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if ctype == "application/octet-stream":
+            self.send_header("Content-Disposition", f'attachment; filename="{stored}"')
+        self.end_headers()
+        self.wfile.write(data)
 
     def _answer(self, conn, f):
         """Answer a pending decision. Returns False (writing nothing) when the decision

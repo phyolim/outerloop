@@ -48,6 +48,21 @@ assert r.status == 200 and r.read() == payload, "served bytes differ"
 code, out = post_raw("/ui/attach?name=empty.png", b"")
 assert code == 400, out
 
+# Uploaded markup must NEVER serve same-origin-executable (stored XSS): html/svg
+# come back as an opaque download with nosniff, not text/html / image/svg+xml.
+for evil in ("evil.html", "evil.svg"):
+    code, out = post_raw(f"/ui/attach?name={evil}", b"<script>alert(1)</script>")
+    assert code == 200, out
+    r = urlopen(BASE + out["url"])
+    assert r.headers["Content-Type"] == "application/octet-stream", (evil, r.headers["Content-Type"])
+    assert r.headers["X-Content-Type-Options"] == "nosniff", evil
+    assert (r.headers["Content-Disposition"] or "").startswith("attachment"), evil
+# ...while a real image still renders inline.
+code, out = post_raw("/ui/attach?name=ok.png", b"\x89PNG ok")
+r = urlopen(BASE + out["url"])
+assert r.headers["Content-Type"] == "image/png", r.headers["Content-Type"]
+assert r.headers["X-Content-Type-Options"] == "nosniff"
+
 # Traversal-looking GET never escapes the attachments dir.
 try:
     r = urlopen(BASE + "/attachments/..%2F..%2Finbox.db")

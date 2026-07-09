@@ -12,18 +12,24 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
-/* Only link/image targets that can't run script. Text is already escaped. */
+/* Only link/image targets that can't run script or silently call out: no
+   javascript:/data:, and no protocol-relative //host (an attacker-chosen img
+   host would leak every viewer's IP). Text is already escaped. */
 function safeUrl(u: string): string {
-  return /^(https?:\/\/|\/|#|mailto:)/i.test(u) ? u : '#'
+  return /^(https?:\/\/|\/(?!\/)|#|mailto:)/i.test(u) ? u : '#'
 }
 
 function inline(s: string): string {
+  // Tokenize code spans out first so their contents stay literal — `[x](y)`
+  // must render as code, not become a link.
+  const codes: string[] = []
   return s
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/`([^`]+)`/g, (_, c) => `\x00${codes.push(`<code>${c}</code>`) - 1}\x00`)
     .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, url) => `<img src="${safeUrl(url)}" alt="${alt}" loading="lazy" />`)
     .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, txt, url) => `<a href="${safeUrl(url)}" target="_blank" rel="noopener">${txt}</a>`)
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|\s)\*([^*\n]+)\*(?=\s|$)/g, '$1<em>$2</em>')
+    .replace(/\x00(\d+)\x00/g, (_, i) => codes[+i])
 }
 
 export function renderMarkdown(src: string): string {

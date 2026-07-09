@@ -316,8 +316,11 @@ class CodingHandler(base.Handler):
                    f" SKIP this step entirely — do not force it or burn time on it.\n"
                    f"3. Push the branch: git push -u origin {branch}\n"
                    f"4. If no PR exists for it yet, open one (do NOT create a duplicate if"
-                   f" one exists). Write a formatted markdown description to PR_BODY.md in"
-                   f" this worktree with these sections: '## Summary' (what changed and"
+                   f" one exists). Write a formatted markdown description to"
+                   # OUTSIDE the worktree: a later rework cycle's commit_all does
+                   # `git add -A`, which would sweep a stray body file into the branch.
+                   f" /tmp/outerloop-pr-body-{ticket['id']}.md"
+                   f" with these sections: '## Summary' (what changed and"
                    f" why, 1-3 sentences), '## Changes' (bullet list of the notable"
                    f" changes), '## Screenshots' (only if step 2 captured any: embed each"
                    f" as ![name](https://raw.githubusercontent.com/{slug}/<commit sha from"
@@ -326,7 +329,8 @@ class CodingHandler(base.Handler):
                    f" verified). Base it on the ticket and the actual diff — do not invent"
                    f" changes that aren't in the diff.\n"
                    f"   Then open it: gh pr create --head {branch}"
-                   f" --title <a concise title from the ticket> --body-file PR_BODY.md\n"
+                   f" --title <a concise title from the ticket>"
+                   f" --body-file /tmp/outerloop-pr-body-{ticket['id']}.md\n"
                    f"TICKET TITLE: {ticket['title']}\nTICKET BODY: {ticket['body']}\n"
                    f"ACCEPTANCE CRITERIA: {crit}\n"
                    f"Do NOT merge anything and do NOT touch any other branch.")

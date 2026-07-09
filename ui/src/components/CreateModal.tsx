@@ -114,8 +114,10 @@ function CreateModal({ open, onClose }: { open: boolean; onClose: () => void }) 
           className={`${INPUT} w-full resize-y`}
         />
         <div className="mb-3.5 mt-1">
+          {/* Functional set: the upload resolves async, so the render-time `form`
+              snapshot may be stale (user typed meanwhile, or Create reset the form). */}
           <AttachButton
-            onInsert={(s) => ui$.form.body.set(form.body ? `${form.body}\n${s}` : s)}
+            onInsert={(s) => ui$.form.body.set((v) => (v ? `${v}\n${s}` : s))}
           />
         </div>
 

@@ -175,7 +175,9 @@ export function AttachButton({ onInsert }: { onInsert: (snippet: string) => void
           setBusy(true)
           try {
             const { url, name } = await uploadAttachment(file)
-            const img = /\.(png|jpe?g|gif|webp|svg)$/i.test(name)
+            // No svg here: the server serves svg as a download (it can carry
+            // script), so only bitmap types are inserted as inline images.
+            const img = /\.(png|jpe?g|gif|webp)$/i.test(name)
             onInsert(img ? `![${name}](${url})` : `[${name}](${url})`)
           } catch {
             window.alert('Upload failed.')
