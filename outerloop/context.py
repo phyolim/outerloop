@@ -134,6 +134,7 @@ def _agent_run(ctx, k):
 
 
 AGENT_EVENT_CAP = 2000  # rolling live-feed window; agent_run.output_json is the durable record
+AGENT_EVENT_KEEP_DAYS = 7  # age backstop so exempted failed/blocked events don't pile up forever
 
 
 def _agent_event(ctx, k):
@@ -144,8 +145,14 @@ def _agent_event(ctx, k):
             "INSERT INTO agent_event(ticket_id, session_id, role, kind, body)"
             " VALUES(?,?,?,?,?)",
             (k["ticket_id"], k["session_id"], k["role"], k["kind"], k["body"]))
-        conn.execute("DELETE FROM agent_event WHERE id <= (SELECT MAX(id) - ? FROM agent_event)",
-                     (AGENT_EVENT_CAP,))
+        # Ring-buffer prune, but events of failed/blocked tickets outlive the cap —
+        # those are the transcripts a human inspects — up to the age backstop.
+        conn.execute(
+            "DELETE FROM agent_event WHERE (id <= (SELECT MAX(id) - ? FROM agent_event)"
+            " AND ticket_id NOT IN"
+            " (SELECT id FROM ticket WHERE status IN ('failed','blocked')))"
+            " OR created_at < datetime('now', ?)",
+            (AGENT_EVENT_CAP, f"-{AGENT_EVENT_KEEP_DAYS} days"))
     return {"ok": True}
 
 

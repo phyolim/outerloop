@@ -912,6 +912,15 @@ class Handler(BaseHTTPRequestHandler):
             steps = [{"action": s["action"], "reason": s["reason"]} for s in reversed(
                 conn.execute("SELECT action, reason FROM audit WHERE ticket_id=?"
                              " ORDER BY id DESC LIMIT 5", (tid,)).fetchall())]
+        elif t["status"] == "done":
+            # Mirror the failure branch: a done ticket's thread says how it ended
+            # (closed/dismissed land in status='done' too, not just finished/merged).
+            r = conn.execute("SELECT action, reason, created_at FROM audit WHERE ticket_id=?"
+                             " AND action IN ('finished','merged','closed','dismissed')"
+                             " ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
+            if r:
+                comments.append({"author": "system", "kind": r["action"],
+                                 "body": r["reason"] or r["action"], "at": r["created_at"]})
         comments.sort(key=lambda c: c["at"] or "")
         runs = [{"role": r["role"], "model": r["model"], "tokens_in": r["tokens_in"],
                  "tokens_out": r["tokens_out"], "exit_code": r["exit_code"],
