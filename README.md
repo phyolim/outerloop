@@ -1,5 +1,6 @@
 # outerloop
 
+![Screenshot 2026-07-08 at 6.02.25 PM.png](docs/Screenshot%202026-07-08%20at%206.02.25%E2%80%AFPM.png)
 Outerloop turns the Macs you already own into a small fleet of Claude Code workers,
 managed from one web dashboard. One always-on Mac is the **hub**: it holds the ticket
 queue, the scheduler, and the dashboard. Any other Mac joins as a **worker**. A single
