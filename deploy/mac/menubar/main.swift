@@ -264,7 +264,6 @@ func run(_ launchPath: String, _ args: [String]) -> (code: Int32, out: String) {
 // brew can't swap the bundle from a terminal without the App Management TCC
 // grant, but an app replacing an app signed by the SAME team is never gated
 // (the Sparkle model) — so the app updates itself and the cask is auto_updates.
-let GH_LATEST = "https://api.github.com/repos/phyolim/outerloop/releases/latest"
 let TEAM_ID = "QGB9U9HXX3"
 
 func semverNewer(_ a: String, _ b: String) -> Bool {   // a > b, numeric per part
@@ -308,6 +307,25 @@ func selfUpdate(to ver: String) -> String? {
     try? sh.run()
     DispatchQueue.main.async { NSApp.terminate(nil) }
     return nil
+}
+
+// Hands-off update: the hub reports its version on every /api/fleet. When it's
+// newer than ours, pull the matching notarized build and swap in place — no click.
+// selfUpdate verifies the signature and relaunches, so on success this never
+// returns. `autoUpdating` is the single lock shared with the popover's manual
+// Update button, so a background poll and a click can't stack downloads.
+var autoUpdating = false
+func maybeAutoUpdate(to hubVersion: String?) {
+    guard let v = hubVersion, APP_VERSION != "?", semverNewer(v, APP_VERSION), !autoUpdating
+        else { return }
+    autoUpdating = true
+    DispatchQueue.global().async {
+        let err = selfUpdate(to: v)                 // relaunches on success
+        DispatchQueue.main.async {
+            autoUpdating = false
+            if let err { NSLog("outerloop: auto-update to v\(v) failed: \(err)") }
+        }
+    }
 }
 
 func isRunning(_ label: String) -> Bool {
@@ -1151,10 +1169,9 @@ final class PopoverPane: NSViewController {
     }
     var pairPhase: PairPhase = .idle
     var pairNote: String?   // why we're (re-)pairing, e.g. token revoked by the hub
-    var updateVersion: String?          // newer notarized build on GitHub
+    var updateVersion: String?          // hub is advertising a newer build
     var updating = false
     var updateError: String?
-    static var lastUpdateCheck = Date.distantPast
     let discovery = HubDiscovery()
     var pairPoll: Timer?
     var pairTick: Timer?
@@ -1188,37 +1205,17 @@ final class PopoverPane: NSViewController {
             return
         }
         render(fleet: nil, decisions: nil)   // instant skeleton, then live data
-        refresh()
-        checkForUpdate()
-    }
-
-    // Poll GitHub for a newer notarized build, at most every 6h. The result just
-    // arms the "Update" button in the version footer — installing is a click.
-    func checkForUpdate() {
-        guard APP_VERSION != "?",   // unbundled dev run
-              Date().timeIntervalSince(Self.lastUpdateCheck) > 6 * 3600 else { return }
-        Self.lastUpdateCheck = Date()
-        guard let url = URL(string: GH_LATEST) else { return }
-        var req = URLRequest(url: url); req.timeoutInterval = 10
-        URLSession.shared.dataTask(with: req) { data, _, _ in
-            guard let j = (data.flatMap { try? JSONSerialization.jsonObject(with: $0) }) as? [String: Any],
-                  let tag = j["tag_name"] as? String else { return }
-            let ver = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-            let hasZip = ((j["assets"] as? [[String: Any]]) ?? [])
-                .contains { ($0["name"] as? String) == "Outerloop-\(ver).zip" }
-            guard hasZip, semverNewer(ver, APP_VERSION) else { return }
-            DispatchQueue.main.async { self.updateVersion = ver }   // shown on next render
-        }.resume()
+        refresh()                            // update detection rides fleet["version"] in render()
     }
 
     @objc func installUpdate() {
-        guard let uv = updateVersion, !updating else { return }
-        updating = true; updateError = nil
+        guard let uv = updateVersion, !updating, !autoUpdating else { return }
+        updating = true; autoUpdating = true; updateError = nil
         refresh()
         DispatchQueue.global().async {
             let err = selfUpdate(to: uv)    // on success the app relaunches; no return
             DispatchQueue.main.async {
-                self.updating = false
+                self.updating = false; autoUpdating = false
                 self.updateError = err
                 self.refresh()
             }
@@ -1264,6 +1261,13 @@ final class PopoverPane: NSViewController {
         // header: pulsing dot, wordmark, role, busy count, gear → full window
         let workers = (fleet?["workers"] as? [[String: Any]]) ?? []
         let busy = workers.filter { $0["current_ticket"] != nil && !($0["current_ticket"] is NSNull) }.count
+        // The hub advertises its version on every fleet poll; a newer one arms the
+        // footer's Update button. The background poller installs it hands-off, but
+        // this keeps the popover honest if the user opens it mid-cycle. ("?" == an
+        // unbundled dev run, which can't self-update — never arm it there.)
+        if APP_VERSION != "?", let hv = fleet?["version"] as? String, semverNewer(hv, APP_VERSION) {
+            updateVersion = hv
+        }
         let dot = label("●", .systemFont(ofSize: 10), fleet == nil ? C.tx3 : C.acc)
         dot.frame = NSRect(x: inset, y: 15, width: 12, height: 14); view.addSubview(dot)
         let mark = NSTextField(labelWithString: "")
@@ -1436,11 +1440,11 @@ final class PopoverPane: NSViewController {
         y += 34
 
         // version footer: this app's build (hub version lives in the dashboard header),
-        // plus the self-update affordance when GitHub has a newer notarized build.
+        // plus the self-update affordance when the hub is advertising a newer build.
         let verL = label("v\(APP_VERSION)", monoFont(10), C.tx3)
         verL.frame = NSRect(x: inset, y: y + 3, width: 120, height: 13)
         view.addSubview(verL)
-        if updating {
+        if updating || autoUpdating {
             let u = label("updating…", monoFont(10), C.tx3)
             u.alignment = .right
             u.frame = NSRect(x: W - inset - 140, y: y + 3, width: 140, height: 13); view.addSubview(u)
@@ -1809,6 +1813,10 @@ final class Controller: NSObject, NSWindowDelegate {
         item.button?.action = #selector(togglePopover)
         refreshIcon()
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in self.refreshIcon(); self.refreshStatusBlock() }
+        // Hands-off auto-update: ask the hub its version and swap ourselves when it's
+        // ahead. 15s after launch (let the network/hub settle), then every 10 min.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.autoUpdatePoll() }
+        Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in self.autoUpdatePoll() }
         NotificationCenter.default.addObserver(self, selector: #selector(startAll), name: .olStartAll, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(stopAll), name: .olStopAll, object: nil)
         DispatchQueue.main.async { [weak self] in self?.configureHubIfNeeded() }
@@ -1912,6 +1920,10 @@ final class Controller: NSObject, NSWindowDelegate {
             s.append(NSAttributedString(string: " · \(readHubURL() ?? "(hub not set)")", attributes: dim))
         }
         statusBlock.attributedStringValue = s
+    }
+
+    func autoUpdatePoll() {
+        apiGET("/api/fleet") { j in maybeAutoUpdate(to: j?["version"] as? String) }
     }
 
     func refreshIcon() {

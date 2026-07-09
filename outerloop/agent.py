@@ -36,6 +36,7 @@ def _fake(role, prompt):
         # the threaded-back answer) proceeds — so the clarification loop is exercisable.
         if "CLARIFY" in prompt and "EARLIER CLARIFICATIONS" not in prompt:
             return {"question": "Which datastore should this target — Postgres or SQLite?",
+                    "options": ["Postgres", "SQLite"],
                     "summary": "blocked pending clarification (fake)"}
         return {"summary": "implemented feature (fake)",
                 "files_changed": ["src/feature.py"], "diff_stat": "+24 -3"}
@@ -68,13 +69,19 @@ ROLE_SCHEMAS = {
     "triage": '{"keep": true, "reason": "<one line>", "impact": 3, "urgency": 3,'
               ' "confidence": 3, "effort": 3, "reversibility": "reversible",'
               ' "justification": "<one line>"}'
-              '\nWhen keep is false the rating fields are ignored, so any values are fine.',
+              '\nWhen keep is false the rating fields are ignored, so any values are fine.'
+              '\nIf the ticket is a REAL request but too vague/ambiguous to act on, do NOT'
+              ' mark it junk — instead ask the human, adding "question": "<the one thing'
+              ' you need clarified>" (and optionally "options": ["choice A","choice B"] when'
+              ' the answer is a pick from a few alternatives). keep stays true.',
     "scorer": '{"impact": 3, "urgency": 3, "confidence": 3, "effort": 3,'
               ' "reversibility": "reversible", "justification": "<one line>"}',
     "groomer": '{"tasks": ["..."], "acceptance_criteria": ["..."], "summary": "<one line>"}',
     "author": '{"summary": "<one line>", "files_changed": ["..."], "diff_stat": "+N -M"}'
               '\nOR, if a requirement is ambiguous and you cannot proceed safely, respond'
-              ' with ONLY {"question": "<the one thing you need the human to clarify>"}.',
+              ' with ONLY {"question": "<the one thing you need the human to clarify>"}.'
+              ' When the answer is a pick from a few alternatives, add'
+              ' "options": ["choice A","choice B"] so the human can just click one.',
     "reviewer": '{"verdict": "approve", "findings": ["..."]}',
     "fixer": '{"summary": "<one line>"}',
     "shipper": '{"pushed": true, "pr_url": "<the PR url, or empty if it failed>",'

@@ -88,6 +88,7 @@ export interface DecisionContext {
   checks?: string
   checks_green?: boolean
   findings?: string[]
+  options?: string[] // clarification: preset choices the human can click to answer
 }
 
 export interface ThreadComment {

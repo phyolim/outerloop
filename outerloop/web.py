@@ -19,7 +19,7 @@ from . import __version__, auth, config, db, git_ops, pairing, personas, scoring
 def _ctx_public(ctx):
     """Whitelist the decision-context fields the SPA renders (PR, diff, checks,
     findings) — never dumps internal drafted payloads."""
-    keys = ("pr_url", "diff_stat", "checks", "checks_green", "findings")
+    keys = ("pr_url", "diff_stat", "checks", "checks_green", "findings", "options")
     return {k: ctx[k] for k in keys if k in ctx}
 
 

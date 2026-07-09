@@ -64,6 +64,16 @@ def operator_notes(hs):
     return f"\nOPERATOR NOTES (human steering — honor these):{notes}" if notes else ""
 
 
+def answered_clarifications(hs):
+    """Q&A the human already answered (a triage or author clarification question), for
+    prompts. Excludes operator notes — operator_notes() renders those. Empty string when
+    there are none, so callers can always '+' it onto a prompt."""
+    qa = [c for c in hs.get("clarifications", [])
+          if c.get("q") and c.get("q") != "(operator note)"]
+    body = "".join(f"\n  Q: {c['q']}\n  A: {c.get('a', '')}" for c in qa)
+    return f"\nANSWERED CLARIFICATIONS (already resolved — honor these):{body}" if qa else ""
+
+
 def note_agent(ctx, ticket, hs, res):
     """Track consecutive agent timeouts; fail the ticket after the cap (must-fix #5).
     Returns True if it is safe to continue this stage, False if the ticket was failed."""
