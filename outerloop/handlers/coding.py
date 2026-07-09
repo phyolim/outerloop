@@ -296,13 +296,25 @@ class CodingHandler(base.Handler):
             return "unshippable repo_path -> error"
         hs["pending_action"] = {"kind": "pr_create", "branch": branch}
         base.save_hs(ctx, ticket, hs, "effect_pending", "about to open PR")
+        crit = (hs.get("groom") or {}).get("acceptance_criteria", [])
         res = agent.run_agent(
             ctx, "shipper", ticket_id=ticket["id"], ticket=ticket, cwd=hs.get("worktree_path"),
             worktree_path=hs.get("worktree_path"), allowed_tools="Bash",
             prompt=f"Ship the reviewed branch {branch} from this worktree:\n"
                    f"1. Push it: git push -u origin {branch}\n"
-                   f"2. If no PR exists for it yet, open one: gh pr create --fill"
-                   f" --head {branch}  (do NOT create a duplicate if one exists).\n"
+                   f"2. If no PR exists for it yet, open one (do NOT create a duplicate if"
+                   f" one exists). Write a formatted markdown PR description first, then"
+                   f" open the PR with it:\n"
+                   f"   - Review the change: git diff {hs.get('base_branch') or 'origin/HEAD'}...{branch}\n"
+                   f"   - Write the description to PR_BODY.md in this worktree with these"
+                   f" sections: '## Summary' (what changed and why, 1-3 sentences),"
+                   f" '## Changes' (bullet list of the notable changes), and '## Test plan'"
+                   f" (how it was/should be verified). Base it on the ticket and the actual"
+                   f" diff — do not invent changes that aren't in the diff.\n"
+                   f"   - Open it: gh pr create --head {branch}"
+                   f" --title <a concise title from the ticket> --body-file PR_BODY.md\n"
+                   f"TICKET TITLE: {ticket['title']}\nTICKET BODY: {ticket['body']}\n"
+                   f"ACCEPTANCE CRITERIA: {crit}\n"
                    f"Do NOT merge anything and do NOT touch any other branch.")
         if not base.note_agent(ctx, ticket, hs, res):
             return "failed: shipper timed out"
