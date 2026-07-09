@@ -156,6 +156,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if u.path == "/ui/events":
             return self._events()
+        if u.path.startswith("/attachments/"):
+            return self._serve_attachment(u.path)
         if u.path.startswith("/ui/"):
             conn = db.connect()
             try:
@@ -222,6 +224,9 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if not self._gate(u):
             return
+        if u.path == "/ui/attach":
+            # Raw-bytes upload (filename in the query string) — no multipart parsing.
+            return self._attach(u)
         if not u.path.startswith("/ui/"):
             self._form()  # drain the body so keep-alive stays in sync
             return self._json_send({"error": "not found"}, 404)
@@ -232,6 +237,55 @@ class Handler(BaseHTTPRequestHandler):
             conn.close()
 
     # -- write helpers --------------------------------------------------------
+    _ATTACH_MAX = 10 * 1024 * 1024  # 10MB — screenshots and logs, not videos
+
+    def _attach(self, u):
+        """Store an uploaded file under ATTACHMENTS_DIR and return its /attachments/
+        URL, for embedding in ticket bodies and comments as markdown. Raw body +
+        ?name= query keeps it one rfile.read — no multipart dependency."""
+        name = parse_qs(u.query).get("name", [""])[0]
+        # Keep only a safe basename; a timestamp prefix makes collisions a non-issue.
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.") or "file"
+        try:
+            n = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return self._json_send({"error": "bad Content-Length"}, 400)
+        if n <= 0 or n > self._ATTACH_MAX:
+            return self._json_send({"error": f"size must be 1..{self._ATTACH_MAX} bytes"}, 400)
+        data = self.rfile.read(n)
+        if len(data) != n:  # client aborted mid-upload: don't store a truncated blob
+            return self._json_send({"error": "body shorter than Content-Length"}, 400)
+        config.ensure_dirs()
+        stored = f"{int(time.time() * 1000)}-{safe}"
+        (config.ATTACHMENTS_DIR / stored).write_bytes(data)
+        return self._json_send({"url": f"/attachments/{stored}", "name": safe})
+
+    # The only content types an attachment may render inline. Anything else —
+    # notably svg/html/xml, which would execute same-origin as the dashboard
+    # (stored XSS: uploaded <script> could drive every /ui/* write) — downloads
+    # as an opaque blob instead.
+    _INLINE_TYPES = ("image/png", "image/jpeg", "image/gif", "image/webp")
+
+    def _serve_attachment(self, path):
+        """GET /attachments/<stored>: same trust zone as the SPA (cookie-gated when a
+        UI secret is set). Sanitized to a basename so it can't walk out of the dir."""
+        stored = re.sub(r"[^A-Za-z0-9._-]+", "", path.rsplit("/", 1)[-1])
+        f = config.ATTACHMENTS_DIR / stored
+        if not stored or not f.is_file():
+            return self._json_send({"error": "not found"}, 404)
+        ctype = mimetypes.guess_type(stored)[0] or "application/octet-stream"
+        if ctype not in self._INLINE_TYPES:
+            ctype = "application/octet-stream"
+        data = f.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if ctype == "application/octet-stream":
+            self.send_header("Content-Disposition", f'attachment; filename="{stored}"')
+        self.end_headers()
+        self.wfile.write(data)
+
     def _answer(self, conn, f):
         """Answer a pending decision. Returns False (writing nothing) when the decision
         is unknown or already answered — a stale/double answer must not re-activate a

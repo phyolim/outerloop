@@ -4,7 +4,7 @@ import { observer, use$ } from '@legendapp/state/react'
 import { addTicket, fetchTickets, queryKeys } from '../api'
 import { ui$, resetForm } from '../state'
 import { KINDS } from '../types'
-import { BTN, INPUT, kindColor } from './ui'
+import { AttachButton, BTN, INPUT, kindColor } from './ui'
 
 // Coding kinds get a repo; research/ops don't. Mirrors outerloop/taxonomy.type_for.
 const CODING = new Set(['feature', 'bug', 'chore'])
@@ -110,9 +110,16 @@ function CreateModal({ open, onClose }: { open: boolean; onClose: () => void }) 
           value={form.body}
           onChange={(e) => ui$.form.body.set(e.target.value)}
           rows={3}
-          placeholder="Optional context for the worker."
-          className={`${INPUT} mb-3.5 w-full resize-y`}
+          placeholder="Optional context for the worker (markdown)."
+          className={`${INPUT} w-full resize-y`}
         />
+        <div className="mb-3.5 mt-1">
+          {/* Functional set: the upload resolves async, so the render-time `form`
+              snapshot may be stale (user typed meanwhile, or Create reset the form). */}
+          <AttachButton
+            onInsert={(s) => ui$.form.body.set((v) => (v ? `${v}\n${s}` : s))}
+          />
+        </div>
 
         <div className="mb-4 grid gap-2.5 sm:grid-cols-2">
           <div>

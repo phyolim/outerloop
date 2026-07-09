@@ -1,4 +1,7 @@
+import { useRef, useState } from 'react'
 import type { CSSProperties, ReactNode, SelectHTMLAttributes } from 'react'
+
+import { uploadAttachment } from '../api'
 
 /* The shared vocabulary every page speaks — the Mission Control voice:
    hairline-bordered panels, monospace data, colored mono status text.
@@ -151,5 +154,47 @@ export function Select({
         <path d="M4 6l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </span>
+  )
+}
+
+/* Attach a file to any markdown-capable text field: uploads to /ui/attach and hands
+   back a snippet to insert — images as ![name](url), everything else as [name](url). */
+export function AttachButton({ onInsert }: { onInsert: (snippet: string) => void }) {
+  const [busy, setBusy] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
+  return (
+    <>
+      <input
+        ref={input}
+        type="file"
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0]
+          e.target.value = ''
+          if (!file) return
+          setBusy(true)
+          try {
+            const { url, name } = await uploadAttachment(file)
+            // No svg here: the server serves svg as a download (it can carry
+            // script), so only bitmap types are inserted as inline images.
+            const img = /\.(png|jpe?g|gif|webp)$/i.test(name)
+            onInsert(img ? `![${name}](${url})` : `[${name}](${url})`)
+          } catch {
+            window.alert('Upload failed.')
+          } finally {
+            setBusy(false)
+          }
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => input.current?.click()}
+        disabled={busy}
+        className="text-xs text-tx3 underline-offset-2 transition-colors hover:text-tx1 hover:underline disabled:opacity-40"
+        title="Attach a file or screenshot — inserted as markdown"
+      >
+        {busy ? 'Uploading…' : '📎 Attach'}
+      </button>
+    </>
   )
 }
