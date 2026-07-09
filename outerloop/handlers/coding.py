@@ -295,7 +295,7 @@ class CodingHandler(base.Handler):
         # a deterministic config error — no shipper run or retry can fix it, and every
         # retry burns a full agent run. Fail loud BEFORE spawning the shipper; the
         # human fixes repo_path (UI edit) and hits Retry, which re-enters this stage.
-        _, serr = git_ops.gh_slug(ctx, ticket)
+        slug, serr = git_ops.gh_slug(ctx, ticket)
         if serr:
             base.fail(ctx, ticket, f"cannot ship branch {branch}: {serr}")
             return "unshippable repo_path -> error"
@@ -306,17 +306,26 @@ class CodingHandler(base.Handler):
             ctx, "shipper", ticket_id=ticket["id"], ticket=ticket, cwd=hs.get("worktree_path"),
             worktree_path=hs.get("worktree_path"), allowed_tools="Bash",
             prompt=f"Ship the reviewed branch {branch} from this worktree:\n"
-                   f"1. Push it: git push -u origin {branch}\n"
-                   f"2. If no PR exists for it yet, open one (do NOT create a duplicate if"
-                   f" one exists). Write a formatted markdown PR description first, then"
-                   f" open the PR with it:\n"
-                   f"   - Review the change: git diff {hs.get('base_branch') or 'origin/HEAD'}...{branch}\n"
-                   f"   - Write the description to PR_BODY.md in this worktree with these"
-                   f" sections: '## Summary' (what changed and why, 1-3 sentences),"
-                   f" '## Changes' (bullet list of the notable changes), and '## Test plan'"
-                   f" (how it was/should be verified). Base it on the ticket and the actual"
-                   f" diff — do not invent changes that aren't in the diff.\n"
-                   f"   - Open it: gh pr create --head {branch}"
+                   f"1. Review the change: git diff {hs.get('base_branch') or 'origin/HEAD'}...{branch}\n"
+                   f"2. ONLY IF the change has a user-visible UI surface AND the project"
+                   f" can be run locally (dev server, static page): capture screenshot(s)"
+                   f" of the changed screens (e.g. start the app, then"
+                   f" `npx playwright screenshot <url> shot.png`), save them under"
+                   f" .outerloop/screenshots/ in this worktree, and commit them on"
+                   f" {branch}. If there is no visible surface or the app cannot be run,"
+                   f" SKIP this step entirely — do not force it or burn time on it.\n"
+                   f"3. Push the branch: git push -u origin {branch}\n"
+                   f"4. If no PR exists for it yet, open one (do NOT create a duplicate if"
+                   f" one exists). Write a formatted markdown description to PR_BODY.md in"
+                   f" this worktree with these sections: '## Summary' (what changed and"
+                   f" why, 1-3 sentences), '## Changes' (bullet list of the notable"
+                   f" changes), '## Screenshots' (only if step 2 captured any: embed each"
+                   f" as ![name](https://raw.githubusercontent.com/{slug}/<commit sha from"
+                   f" `git rev-parse HEAD`>/.outerloop/screenshots/<name>.png) — the sha,"
+                   f" NOT the branch name), and '## Test plan' (how it was/should be"
+                   f" verified). Base it on the ticket and the actual diff — do not invent"
+                   f" changes that aren't in the diff.\n"
+                   f"   Then open it: gh pr create --head {branch}"
                    f" --title <a concise title from the ticket> --body-file PR_BODY.md\n"
                    f"TICKET TITLE: {ticket['title']}\nTICKET BODY: {ticket['body']}\n"
                    f"ACCEPTANCE CRITERIA: {crit}\n"
