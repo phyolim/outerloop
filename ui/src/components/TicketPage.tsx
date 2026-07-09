@@ -63,6 +63,18 @@ function ContextBlock({ ctx }: { ctx?: DecisionContext }) {
           ))}
         </ul>
       ) : null}
+      {ctx.options && ctx.options.length ? (
+        <div className="flex flex-wrap gap-1.5 font-sans">
+          {ctx.options.map((o, i) => (
+            <span
+              key={i}
+              className="rounded-[5px] border border-hairline2 px-1.5 py-px text-[11px] text-tx2"
+            >
+              {o}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -558,11 +570,33 @@ export default function TicketPage({ id }: { id: number }) {
               <p className="mono mb-2.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-info">
                 ? your reply
               </p>
+              {/* Multiple choice: one click answers with that option and resumes the
+                  worker — the textarea below stays for a free-form answer instead. */}
+              {pending.context?.options?.length ? (
+                <div className="mb-2.5 flex flex-wrap gap-2">
+                  {pending.context.options.map((opt) => (
+                    <button
+                      key={opt}
+                      onClick={() =>
+                        answer.mutate({ decision_id: decisionId!, action: 'approve', note: opt })
+                      }
+                      disabled={answer.isPending}
+                      className="rounded-[7px] border border-info/40 bg-info/10 px-3 py-1.5 text-[12px] font-medium text-info transition-colors hover:bg-info/20 disabled:opacity-40"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
               <textarea
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 rows={3}
-                placeholder="Answer claude's question — sending resumes the worker."
+                placeholder={
+                  pending.context?.options?.length
+                    ? 'Or type a different answer — sending resumes the worker.'
+                    : "Answer claude's question — sending resumes the worker."
+                }
                 className={`${INPUT} w-full`}
               />
               <div className="mt-2.5 flex items-center gap-2">

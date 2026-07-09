@@ -156,8 +156,13 @@ class CodingHandler(base.Handler):
                 return "failed: clarification cap"
             base.save_hs(ctx, ticket, hs, "awaiting_clarification",
                          "author needs input; saving progress before blocking")
-            gate.require(ctx, ticket, "clarification", q,
-                         {"asked_by": "author", "progress": res["data"].get("summary", "")},
+            # Multiple-choice questions carry `options` so the UI renders clickable
+            # picks instead of only a free-text box (see web._ctx_public whitelist).
+            qctx = {"asked_by": "author", "progress": res["data"].get("summary", "")}
+            opts = res["data"].get("options")
+            if isinstance(opts, list) and opts:
+                qctx["options"] = [str(o) for o in opts]
+            gate.require(ctx, ticket, "clarification", q, qctx,
                          resume_stage="groomed", pin=ticket["assigned_worker"])
             return "author asked for clarification -> decision queue"
         git_ops.commit_all(ctx, ticket, hs, f"ticket #{ticket['id']}: {ticket['title']}")

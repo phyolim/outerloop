@@ -1,7 +1,7 @@
 # Self-contained: a coding ticket whose author needs input pauses on a 'clarification'
 # block, and resumes to completion once the human answers — the answer threaded back so
 # it isn't re-asked. FAKE mode, throwaway DB, no deps.
-import os, sys, atexit, shutil, tempfile
+import os, sys, atexit, shutil, tempfile, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("OUTERLOOP_FAKE", "1")
 _TMP = tempfile.mkdtemp(prefix="inbox-clar-")
@@ -37,12 +37,16 @@ answered = False
 for i in range(30):
     run_tick()
     c = db.connect()
-    d = c.execute("SELECT kind FROM decision WHERE ticket_id=1 AND status='pending'").fetchone()
+    d = c.execute("SELECT kind, context FROM decision WHERE ticket_id=1 AND status='pending'").fetchone()
     t = c.execute("SELECT status, sub_stage FROM ticket WHERE id=1").fetchone()
     c.close()
     if d and d["kind"] == "clarification":
         saw_clarification = True
         assert t["status"] == "blocked", "a clarification must BLOCK the ticket, not run it"
+        # Multiple-choice question: options ride in the decision context so the UI can
+        # render clickable picks (web._ctx_public whitelists them for the SPA).
+        assert json.loads(d["context"]).get("options") == ["Postgres", "SQLite"], \
+            f"author's multiple-choice options not stored on the decision: {d['context']}"
         answered = answer("clarification", "Use Postgres.")
     else:
         answer("merge", ""); answer("deploy", "")   # auto-approve the human gates to finish
@@ -54,7 +58,6 @@ assert answered, "the clarification was never answered"
 
 c = db.connect()
 t = c.execute("SELECT status, sub_stage, handler_state FROM ticket WHERE id=1").fetchone()
-import json
 hs = json.loads(t["handler_state"])
 n_clar = c.execute("SELECT COUNT(*) n FROM decision WHERE ticket_id=1 AND kind='clarification'").fetchone()["n"]
 c.close()
