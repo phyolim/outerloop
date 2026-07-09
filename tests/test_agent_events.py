@@ -37,6 +37,24 @@ rows = conn.execute("SELECT * FROM agent_event WHERE ticket_id=1").fetchall()
 assert len(rows) == 1 and rows[0]["kind"] == "text" and rows[0]["role"] == "author", \
     [dict(r) for r in rows]
 assert rows[0]["session_id"] == res["session_id"]
+
+# --- 3. prune: the cap evicts old rows, but a failed/blocked ticket's events survive
+#        past it (they're the transcripts a human inspects) — up to the age backstop.
+from outerloop import context
+context.AGENT_EVENT_CAP = 3
+conn.execute("INSERT INTO ticket(id,title,body,type,status) VALUES(2,'f','b','coding','failed')")
+conn.execute("INSERT INTO agent_event(ticket_id,session_id,role,kind,body,created_at)"
+             " VALUES(2,'s','author','text','ancient', datetime('now','-8 days'))")
+conn.execute("INSERT INTO agent_event(ticket_id,session_id,role,kind,body)"
+             " VALUES(2,'s','author','text','keep me')")
+conn.commit()
+ctx = Ctx(conn, config, "tick-test")
+for i in range(4):
+    ctx.write("agent_event", ticket_id=1, session_id="s", role="author", kind="text", body=f"e{i}")
+bodies = [r["body"] for r in conn.execute("SELECT body FROM agent_event ORDER BY id")]
+assert "keep me" in bodies, bodies          # failed ticket exempt from the cap
+assert "ancient" not in bodies, bodies      # ...but not from the age backstop
+assert [b for b in bodies if b.startswith("e")] == ["e1", "e2", "e3"], bodies  # cap still trims ticket 1
 conn.close()
 
-print("ok: agent event stream + persistence")
+print("ok: agent event stream + persistence + prune exemptions")

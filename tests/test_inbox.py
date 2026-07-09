@@ -94,6 +94,10 @@ assert bycard[9]["worker"] is None and bycard[6]["worker"] is None, (bycard[9], 
 # ticket.json mirrors it for the detail page's meta rail
 assert h._ticket_json(c, 3)["ticket"]["worker"] == "hub"
 assert h._ticket_json(c, 6)["ticket"]["worker"] is None
+# a done ticket's thread says what was done (latest finished/merged audit row)
+last = h._ticket_json(c, 6)["comments"][-1]
+assert (last["author"], last["kind"], last["body"]) == \
+    ("system", "merged", "merged, 3/3 checks green"), last
 
 # --- project filter narrows both counts and rows ---
 c.execute("UPDATE ticket SET project='homelab' WHERE id IN (2,5)")
