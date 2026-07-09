@@ -19,7 +19,8 @@ import type { AgentEvent, AgentRun, DecisionContext, Factors, Kind, ThreadCommen
 import { KINDS } from '../types'
 import { ago, fmt } from '../lib'
 import { stageDone } from './lifecycle'
-import { BTN, EmptyState, ErrorBanner, INPUT, PANEL, DEEP, STATE_COLOR, STATUS_LABEL, kindColor } from './ui'
+import { AttachButton, BTN, EmptyState, ErrorBanner, INPUT, PANEL, DEEP, STATE_COLOR, STATUS_LABEL, kindColor } from './ui'
+import { Md } from '../md'
 
 // Coding kinds get a repo; research/ops don't. Mirrors outerloop/taxonomy.type_for.
 const CODING = new Set<Kind>(['feature', 'bug', 'chore'])
@@ -116,7 +117,7 @@ function Comment({ c, i }: { c: ThreadComment; i: number }) {
         <span className="mono ml-auto text-[10px] text-tx3">{fmt(c.at)}</span>
       </div>
       {c.body ? (
-        <p className="whitespace-pre-wrap text-[13px] leading-[1.6] text-[#c6ccd8]">{c.body}</p>
+        <Md source={c.body} />
       ) : (
         <p className="text-[13px] italic text-tx3">(no note)</p>
       )}
@@ -180,9 +181,12 @@ function TicketEditor({
         value={f.body}
         onChange={(e) => setF((v) => ({ ...v, body: e.target.value }))}
         rows={3}
-        placeholder="Description"
-        className={`${INPUT} mb-3 w-full`}
+        placeholder="Description (markdown)"
+        className={`${INPUT} w-full`}
       />
+      <div className="mb-3 mt-1">
+        <AttachButton onInsert={(s) => setF((v) => ({ ...v, body: v.body ? `${v.body}\n${s}` : s }))} />
+      </div>
       <div className="mb-3 grid gap-3 sm:grid-cols-2">
         <input
           value={f.project}
@@ -529,9 +533,7 @@ export default function TicketPage({ id }: { id: number }) {
           ) : ticket.body ? (
             <div className={`${PANEL} mb-4 px-3.5 py-3`}>
               <p className="microlabel mb-1.5">description</p>
-              <p className="whitespace-pre-wrap text-[13px] leading-[1.6] text-[#c6ccd8]">
-                {ticket.body}
-              </p>
+              <Md source={ticket.body} />
             </div>
           ) : null}
 
@@ -738,7 +740,7 @@ export default function TicketPage({ id }: { id: number }) {
                 value={opNote}
                 onChange={(e) => setOpNote(e.target.value)}
                 rows={2}
-                placeholder="Add a note — shown here and passed to the worker on its next run."
+                placeholder="Add a note (markdown) — shown here and passed to the worker on its next run."
                 className={`${INPUT} w-full`}
               />
               <div className="mt-1.5 flex items-center gap-2">
@@ -749,6 +751,7 @@ export default function TicketPage({ id }: { id: number }) {
                 >
                   {comment.isPending ? 'Adding…' : 'Add note'}
                 </button>
+                <AttachButton onInsert={(s) => setOpNote((v) => (v ? `${v}\n${s}` : s))} />
                 {comment.isError ? <span className="text-xs text-bad">Failed.</span> : null}
               </div>
             </div>

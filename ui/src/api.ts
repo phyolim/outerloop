@@ -197,6 +197,17 @@ export function commentTicket(payload: { ticket_id: number; note: string }): Pro
   return postJSON('/ui/comment', payload)
 }
 
+/* Raw-bytes upload (filename in the query) — returns the /attachments/ URL to embed
+   as markdown in a ticket body or comment. */
+export async function uploadAttachment(file: File): Promise<{ url: string; name: string }> {
+  const res = await fetch(`/ui/attach?name=${encodeURIComponent(file.name)}`, {
+    method: 'POST',
+    body: file,
+  })
+  if (!res.ok) throw new Error(`upload failed (${res.status})`)
+  return res.json()
+}
+
 export function editTicket(payload: {
   ticket_id: number
   title: string

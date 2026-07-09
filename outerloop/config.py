@@ -21,6 +21,7 @@ STAFFING_FILE = HOME / "staffing.yml"  # per-project role->persona assignments
 WORKTREES_DIR = HOME / "worktrees"
 REPOS_DIR = HOME / "repos"          # clones of repos this orchestrator created itself
 ARTIFACTS_DIR = HOME / "artifacts"
+ATTACHMENTS_DIR = HOME / "attachments"  # files/screenshots attached via the UI
 BACKUPS_DIR = HOME / "backups"
 UI_DIST = REPO_ROOT / "ui" / "dist"   # built React SPA; served at / when present
 KILL_FILE = HOME / "KILL"
@@ -246,5 +247,6 @@ SETTINGS_DEFAULTS = {
 
 
 def ensure_dirs():
-    for d in (HOME, WORKTREES_DIR, REPOS_DIR, ARTIFACTS_DIR, BACKUPS_DIR, AGENTS_DIR):
+    for d in (HOME, WORKTREES_DIR, REPOS_DIR, ARTIFACTS_DIR, ATTACHMENTS_DIR,
+              BACKUPS_DIR, AGENTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
